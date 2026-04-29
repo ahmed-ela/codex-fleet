@@ -196,6 +196,23 @@ def first_heading_or_line(body: str, fallback: str) -> str:
     return fallback
 
 
+def compact_prompt_preview(body: str, limit: int = 96) -> str:
+    normalized = " ".join(body.split())
+    is_large = "\n" in body or len(body) > 240
+    if is_large:
+        lines = body.count("\n") + 1 if body else 0
+        if lines > 1:
+            label = f"[pasted: {lines} lines, {len(body)} chars]"
+        else:
+            label = f"[pasted: {len(body)} chars]"
+        text = f"{label} {normalized}" if normalized else label
+    else:
+        text = normalized
+    if len(text) <= limit:
+        return text
+    return text[: max(0, limit - 3)] + "..."
+
+
 def queue_files(state: pathlib.Path) -> list[pathlib.Path]:
     queue = state / QUEUE_DIR
     return sorted(p for p in queue.glob("*.md") if p.is_file())
@@ -2621,13 +2638,23 @@ def headful_input_loop(
     last_timer_redraw = 0.0
     finish_requested = False
 
+    def should_compact_input(value: str) -> bool:
+        return "\n" in value or len(value) > 240
+
     def display_input(value: str) -> str:
+        if should_compact_input(value):
+            return compact_prompt_preview(value, limit=160)
         return value.replace("\t", "\\t").replace("\n", "\\n")
 
     def redraw() -> None:
         prefix = f"fleet {format_duration(time.monotonic() - session_started_at)}> "
         rendered = display_input(buffer)
-        rendered_before_cursor = display_input(buffer[:cursor])
+        if cursor == 0:
+            rendered_before_cursor = ""
+        elif should_compact_input(buffer):
+            rendered_before_cursor = rendered
+        else:
+            rendered_before_cursor = display_input(buffer[:cursor])
         columns = max(20, shutil.get_terminal_size((80, 24)).columns)
         available = max(1, columns - len(prefix) - 1)
         cursor_col = len(rendered_before_cursor)
@@ -2898,7 +2925,10 @@ def headful_input_loop(
                     remember_prompt(prompt)
                     deferred_messages.append(prompt)
                     record_deferred_count()
-                    print(f"message queued after current batch #{len(deferred_messages)}: {prompt[:96]}")
+                    print(
+                        f"message queued after current batch #{len(deferred_messages)}: "
+                        f"{compact_prompt_preview(prompt)}"
+                    )
                     if not run_has_workers():
                         headful_mark_input_finished(root, run_id)
                         break
@@ -2923,10 +2953,13 @@ def headful_input_loop(
                     except FleetError:
                         deferred_messages.append(prompt)
                         record_deferred_count()
-                        print(f"message queued after current batch #{len(deferred_messages)}: {prompt[:96]}")
+                        print(
+                            f"message queued after current batch #{len(deferred_messages)}: "
+                            f"{compact_prompt_preview(prompt)}"
+                        )
                     else:
                         last_submit["monotonic"] = time.monotonic()
-                        print(f"queued {job_id}: {prompt[:96]}")
+                        print(f"queued {job_id}: {compact_prompt_preview(prompt)}")
                 redraw()
                 continue
             if value in {"\x7f", "\b"}:

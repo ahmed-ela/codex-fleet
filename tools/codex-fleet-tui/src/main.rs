@@ -30,6 +30,7 @@ use serde_json::{json, Value};
 
 const DEFAULT_WORKERS: usize = 3;
 const MAX_LOG_LINES: usize = 500;
+const COMPACT_INPUT_CHAR_THRESHOLD: usize = 240;
 
 #[derive(Debug)]
 enum BackendEvent {
@@ -65,6 +66,7 @@ struct PreviewPane {
 struct App {
     input: String,
     input_cursor: usize,
+    input_has_paste: bool,
     jobs: Vec<SubmittedJob>,
     message_queue: VecDeque<String>,
     logs: VecDeque<String>,
@@ -94,6 +96,7 @@ impl App {
         let mut app = Self {
             input: String::new(),
             input_cursor: 0,
+            input_has_paste: false,
             jobs: Vec::new(),
             message_queue: VecDeque::new(),
             logs: VecDeque::new(),
@@ -363,7 +366,7 @@ impl App {
 
         self.start_batch_timer_if_needed();
 
-        let title = prompt.chars().take(72).collect::<String>();
+        let title = prompt_title(&prompt);
         self.jobs.push(SubmittedJob {
             id: None,
             title: title.clone(),
@@ -378,8 +381,7 @@ impl App {
         }
         self.history_index = None;
         self.history_draft.clear();
-        self.input.clear();
-        self.input_cursor = 0;
+        self.clear_prompt_input();
         self.status = format!("job {} started", self.jobs.len());
         self.add_log(format!("{source} job {}: {title}", self.jobs.len()));
     }
@@ -410,8 +412,7 @@ impl App {
         self.history_index = None;
         self.history_draft.clear();
         self.message_queue.push_back(prompt);
-        self.input.clear();
-        self.input_cursor = 0;
+        self.clear_prompt_input();
         self.status = format!("queued for next batch ({})", self.message_queue.len());
         self.add_log(format!(
             "{source}: queued message {} for after this batch",
@@ -474,6 +475,9 @@ impl App {
         self.input_cursor += 1;
         self.history_index = None;
         self.history_draft.clear();
+        if self.input.is_empty() {
+            self.input_has_paste = false;
+        }
     }
 
     fn insert_input_text(&mut self, text: &str) {
@@ -487,9 +491,21 @@ impl App {
         let index = self.input_byte_index();
         self.input.insert_str(index, &text);
         self.input_cursor += text.chars().count();
+        if should_compact_input(&text) {
+            self.input_has_paste = true;
+        }
         self.history_index = None;
         self.history_draft.clear();
-        self.status = format!("pasted {} chars", text.chars().count());
+        let line_count = input_line_count(&text);
+        self.status = if line_count > 1 {
+            format!(
+                "pasted {} lines, {} chars",
+                line_count,
+                text.chars().count()
+            )
+        } else {
+            format!("pasted {} chars", text.chars().count())
+        };
     }
 
     fn delete_input_before_cursor(&mut self) {
@@ -502,6 +518,9 @@ impl App {
         self.input.replace_range(start..end, "");
         self.history_index = None;
         self.history_draft.clear();
+        if self.input.is_empty() {
+            self.input_has_paste = false;
+        }
     }
 
     fn delete_input_previous_word(&mut self) {
@@ -525,6 +544,9 @@ impl App {
         self.input_cursor = start;
         self.history_index = None;
         self.history_draft.clear();
+        if self.input.is_empty() {
+            self.input_has_paste = false;
+        }
     }
 
     fn move_input_previous_word(&mut self) {
@@ -558,6 +580,7 @@ impl App {
     fn set_input_from_history(&mut self, value: String) {
         self.input = value;
         self.input_cursor = self.input_len();
+        self.input_has_paste = false;
     }
 
     fn browse_history(&mut self, direction: i32) {
@@ -597,6 +620,15 @@ impl App {
         self.input_cursor = 0;
         self.history_index = None;
         self.history_draft.clear();
+        if self.input.is_empty() {
+            self.input_has_paste = false;
+        }
+    }
+
+    fn clear_prompt_input(&mut self) {
+        self.input.clear();
+        self.input_cursor = 0;
+        self.input_has_paste = false;
     }
 
     fn finish(&mut self) {
@@ -821,8 +853,7 @@ fn inside_tmux() -> bool {
 fn handle_key(app: &mut App, key: KeyEvent) {
     if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
         if !app.input.is_empty() && !app.canceling && (!app.done || app.exit_code == 0) {
-            app.input.clear();
-            app.input_cursor = 0;
+            app.clear_prompt_input();
             app.history_index = None;
             app.history_draft.clear();
             app.status = "input cleared".to_string();
@@ -930,7 +961,8 @@ fn render(frame: &mut Frame, app: &App) {
 
     let input_area = chunks[2];
     let input_inner = inner(input_area);
-    let prompt = Paragraph::new(app.input.as_str())
+    let input_display = input_display_text(app);
+    let prompt = Paragraph::new(input_display.as_str())
         .block(Block::default().title("Prompt").borders(Borders::ALL))
         .wrap(Wrap { trim: false });
     frame.render_widget(prompt, input_area);
@@ -996,12 +1028,13 @@ fn render_workspace_control(frame: &mut Frame, app: &App) {
     } else {
         chunks[2]
     };
+    let input_display = input_display_text(app);
     let prompt = if prompt_height >= 3 {
-        Paragraph::new(app.input.as_str())
+        Paragraph::new(input_display.as_str())
             .block(Block::default().borders(Borders::ALL))
             .wrap(Wrap { trim: false })
     } else {
-        Paragraph::new(format!("> {}", app.input)).wrap(Wrap { trim: false })
+        Paragraph::new(format!("> {}", input_display)).wrap(Wrap { trim: false })
     };
     frame.render_widget(prompt, chunks[2]);
 
@@ -1103,10 +1136,68 @@ fn workspace_preview_pane_label(lines: &[String]) -> Option<String> {
         .find_map(|line| line.strip_prefix("pane ").map(str::to_string))
 }
 
+fn input_display_text(app: &App) -> String {
+    compact_input_display(&app.input, app.input_has_paste).unwrap_or_else(|| app.input.clone())
+}
+
+fn should_compact_input(value: &str) -> bool {
+    value.contains('\n') || value.chars().count() > COMPACT_INPUT_CHAR_THRESHOLD
+}
+
+fn compact_input_display(value: &str, pasted: bool) -> Option<String> {
+    if !should_compact_input(value) {
+        return None;
+    }
+
+    let chars = value.chars().count();
+    let lines = input_line_count(value);
+    let label = if pasted { "pasted" } else { "prompt" };
+    let stats = if lines > 1 {
+        format!("[{label}: {lines} lines, {chars} chars]")
+    } else {
+        format!("[{label}: {chars} chars]")
+    };
+    let preview = compact_whitespace(value);
+    if preview.is_empty() {
+        Some(stats)
+    } else {
+        Some(format!("{stats} {}", truncate_line(&preview, 96)))
+    }
+}
+
+fn prompt_title(prompt: &str) -> String {
+    let title = compact_input_display(prompt, true).unwrap_or_else(|| compact_whitespace(prompt));
+    truncate_line(&title, 72)
+}
+
+fn compact_whitespace(value: &str) -> String {
+    value.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn input_line_count(value: &str) -> usize {
+    if value.is_empty() {
+        0
+    } else {
+        value.split('\n').count()
+    }
+}
+
 fn input_cursor_position(app: &App, input_inner: Rect) -> Position {
+    let compact = compact_input_display(&app.input, app.input_has_paste);
+    let (visible_input, visible_cursor) = if let Some(display) = compact {
+        let cursor = if app.input_cursor == 0 {
+            0
+        } else {
+            display.chars().count()
+        };
+        (display, cursor)
+    } else {
+        (app.input.clone(), app.input_cursor)
+    };
+
     let mut row = 0usize;
     let mut col = 0usize;
-    for ch in app.input.chars().take(app.input_cursor) {
+    for ch in visible_input.chars().take(visible_cursor) {
         if ch == '\n' {
             row += 1;
             col = 0;
@@ -1560,4 +1651,29 @@ fn truncate_line(value: &str, max_chars: usize) -> String {
         .collect::<String>();
     result.push_str("...");
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn compact_display_hides_multiline_paste() {
+        let display = compact_input_display("line one\nline two\nline three", true).unwrap();
+        assert!(display.contains("pasted: 3 lines"));
+        assert!(!display.contains('\n'));
+    }
+
+    #[test]
+    fn small_single_line_input_stays_literal() {
+        assert!(compact_input_display("small prompt", true).is_none());
+    }
+
+    #[test]
+    fn prompt_title_is_one_line_for_paste() {
+        let title = prompt_title("alpha\nbeta\ngamma");
+        assert!(title.contains("pasted: 3 lines"));
+        assert!(!title.contains('\n'));
+        assert!(title.chars().count() <= 72);
+    }
 }

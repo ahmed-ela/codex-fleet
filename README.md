@@ -38,6 +38,10 @@ codex-fleet run --no-hygiene
 codex-fleet hygiene --run <run-id>
 ```
 
+## Job Labels
+
+Fleet derives a short deterministic job label from each prompt and keeps the full unique id behind it, for example `fix-add-deck-label (20260429-...--123456)`. Worker prompts, health output, manifests, and queued logs use the label first so run history stays readable while duplicate prompts still get unique ids.
+
 ## Publish
 
 Fleet treats GitHub as the trunk/publish layer, not as a branch per worker. After a local batch is reconciled and the checkout looks right, publish it explicitly:

@@ -233,10 +233,7 @@ impl App {
             return;
         }
 
-        let Some(rest) = line.strip_prefix("queued ") else {
-            return;
-        };
-        let Some((job_id, title)) = rest.split_once(": ") else {
+        let Some((job_id, title)) = parse_queued_backend_line(line) else {
             return;
         };
         let exact_index = self
@@ -248,7 +245,7 @@ impl App {
             .or(fallback_index)
             .and_then(|index| self.jobs.get_mut(index))
         {
-            job.id = Some(job_id.to_string());
+            job.id = Some(job_id);
             job.status = "running".to_string();
         }
     }
@@ -1313,6 +1310,17 @@ fn prompt_title(prompt: &str, pasted: bool) -> String {
     truncate_line(&title, 72)
 }
 
+fn parse_queued_backend_line(line: &str) -> Option<(String, &str)> {
+    let rest = line.strip_prefix("queued ")?;
+    let (raw_id, title) = rest.split_once(": ")?;
+    let job_id = if let Some((_, suffix)) = raw_id.rsplit_once(" (") {
+        suffix.strip_suffix(')').unwrap_or(raw_id)
+    } else {
+        raw_id
+    };
+    Some((job_id.to_string(), title))
+}
+
 fn compact_whitespace(value: &str) -> String {
     value.split_whitespace().collect::<Vec<_>>().join(" ")
 }
@@ -1862,6 +1870,25 @@ mod tests {
         let value = "typed ".repeat(80);
         assert!(compact_input_display(&value, false).is_none());
         assert!(!prompt_title(&value, false).contains("[pasted:"));
+    }
+
+    #[test]
+    fn queued_line_accepts_label_wrapped_id() {
+        let parsed = parse_queued_backend_line(
+            "queued fix-add-deck-label (20260429--fix-add-deck-label--123456): Fix Add deck label",
+        )
+        .unwrap();
+        assert_eq!(parsed.0, "20260429--fix-add-deck-label--123456");
+        assert_eq!(parsed.1, "Fix Add deck label");
+    }
+
+    #[test]
+    fn queued_line_accepts_legacy_id() {
+        let parsed =
+            parse_queued_backend_line("queued 20260429-123456-123456-old-label: old label")
+                .unwrap();
+        assert_eq!(parsed.0, "20260429-123456-123456-old-label");
+        assert_eq!(parsed.1, "old label");
     }
 
     #[test]

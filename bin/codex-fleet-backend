@@ -54,6 +54,8 @@ WORKTREES_DIR = "worktrees"
 ARCHIVE_DIR = "archive"
 DEFAULT_MODEL = "gpt-5.5"
 DEFAULT_REASONING_EFFORT = "xhigh"
+JOB_TITLE_LIMIT = 96
+JOB_ID_SLUG_LIMIT = 52
 
 
 def now_iso() -> str:
@@ -64,11 +66,11 @@ def compact_time() -> str:
     return dt.datetime.now().strftime("%Y%m%d-%H%M%S")
 
 
-def slugify(value: str, fallback: str = "job") -> str:
+def slugify(value: str, fallback: str = "job", limit: int = 60) -> str:
     value = value.strip().lower()
     value = re.sub(r"[^a-z0-9]+", "-", value)
     value = value.strip("-")
-    return (value or fallback)[:60]
+    return (value or fallback)[:limit]
 
 
 def print_err(message: str) -> None:
@@ -185,19 +187,67 @@ def parse_frontmatter(path: pathlib.Path) -> tuple[dict[str, str], str]:
     return meta, body
 
 
-def first_heading_or_line(body: str, fallback: str) -> str:
+def compact_whitespace(value: str) -> str:
+    return " ".join(value.split())
+
+
+def clean_job_title(value: str, fallback: str = "job", limit: int = JOB_TITLE_LIMIT) -> str:
+    title = compact_whitespace(value)
+    title = title.strip("`*_ \t\r\n")
+    title = re.sub(r"^#+\s*", "", title).strip()
+    title = re.sub(r"\s+([,.;:!?])", r"\1", title)
+
+    prefixes = [
+        r"^(please\s+)?(can|could|would)\s+you\s+",
+        r"^(please\s+)?make\s+sure\s+",
+        r"^we\s+still\s+have\s+the\s+issue\s+where\s+",
+        r"^we\s+still\s+have\s+issue\s+where\s+",
+        r"^we\s+have\s+the\s+issue\s+where\s+",
+        r"^we\s+have\s+issue\s+where\s+",
+        r"^there\s+(is|are)\s+(still\s+)?(an?\s+)?issue\s+where\s+",
+        r"^the\s+issue\s+is\s+that\s+",
+    ]
+    for pattern in prefixes:
+        updated = re.sub(pattern, "", title, count=1, flags=re.IGNORECASE).strip()
+        if updated and updated != title:
+            title = updated
+            break
+
+    if len(title) > limit:
+        candidate = title[: limit + 1]
+        break_at = max(candidate.rfind("."), candidate.rfind(";"), candidate.rfind(","))
+        if break_at >= 36:
+            candidate = candidate[:break_at]
+        else:
+            space_at = candidate.rfind(" ")
+            if space_at >= 36:
+                candidate = candidate[:space_at]
+        title = candidate.rstrip(" ,;:-")
+
+    title = title.strip(" \"'`.,;:-")
+    return title or fallback
+
+
+def infer_job_title(body: str, fallback: str = "job") -> str:
     for raw in body.splitlines():
         line = raw.strip()
-        if not line:
-            continue
         if line.startswith("#"):
-            return line.lstrip("#").strip() or fallback
-        return line[:80]
-    return fallback
+            return clean_job_title(line, fallback)
+        if line:
+            break
+    return clean_job_title(body, fallback)
+
+
+def job_label(title: str) -> str:
+    return slugify(title, fallback="job", limit=JOB_ID_SLUG_LIMIT)
+
+
+def make_job_id(title: str) -> str:
+    return f"{compact_time()}--{job_label(title)}--{random.randrange(100000, 999999)}"
 
 
 def compact_prompt_preview(body: str, limit: int = 96) -> str:
-    normalized = " ".join(body.split())
+    normalized = compact_whitespace(body)
     is_large = "\n" in body or len(body) > 240
     if is_large:
         lines = body.count("\n") + 1 if body else 0
@@ -293,11 +343,12 @@ def remove_run_worktrees(root: pathlib.Path, state: pathlib.Path, run_id: str, v
 def job_from_file(path: pathlib.Path) -> dict[str, Any]:
     meta, body = parse_frontmatter(path)
     job_id = meta.get("id") or path.stem
-    title = meta.get("title") or first_heading_or_line(body, path.stem)
+    title = meta.get("title") or infer_job_title(body, path.stem)
     layer = meta.get("layer") or "default"
     return {
         "id": job_id,
         "title": title,
+        "label": meta.get("label") or job_label(title),
         "layer": layer,
         "path": str(path),
         "body": body,
@@ -310,13 +361,15 @@ def create_job(state: pathlib.Path, body: str, title: str | None, layer: str) ->
     if not body:
         raise FleetError("Refusing to enqueue an empty prompt.")
 
-    inferred_title = title or first_heading_or_line(body, "job")
-    job_id = f"{compact_time()}-{random.randrange(100000, 999999)}-{slugify(inferred_title)}"
+    inferred_title = clean_job_title(title or infer_job_title(body, "job"))
+    label = job_label(inferred_title)
+    job_id = make_job_id(inferred_title)
     path = state / QUEUE_DIR / f"{job_id}.md"
     content = (
         "---\n"
         f"id: {job_id}\n"
         f"title: {inferred_title}\n"
+        f"label: {label}\n"
         f"layer: {layer}\n"
         f"created_at: {now_iso()}\n"
         "---\n\n"
@@ -326,11 +379,13 @@ def create_job(state: pathlib.Path, body: str, title: str | None, layer: str) ->
     return path
 
 
-def job_file_content(job_id: str, body: str, title: str, layer: str) -> str:
+def job_file_content(job_id: str, body: str, title: str, layer: str, label: str | None = None) -> str:
+    resolved_label = label or job_label(title)
     return (
         "---\n"
         f"id: {job_id}\n"
         f"title: {title}\n"
+        f"label: {resolved_label}\n"
         f"layer: {layer}\n"
         f"created_at: {now_iso()}\n"
         "---\n\n"
@@ -635,14 +690,17 @@ def pid_alive(pid: int | None) -> bool:
 def build_manifest(jobs: list[dict[str, Any]]) -> str:
     lines = []
     for job in jobs:
-        lines.append(f"- {job['id']}: {job['title']} (layer: {job['layer']})")
+        label = job.get("label") or job_label(job["title"])
+        lines.append(f"- {label}: {job['title']} (id: {job['id']}, layer: {job['layer']})")
     return "\n".join(lines)
 
 
 def build_worker_prompt(job: dict[str, Any], jobs: list[dict[str, Any]], run_state: dict[str, Any]) -> str:
     other_jobs = [candidate for candidate in jobs if candidate["id"] != job["id"]]
     other_manifest = "\n".join(
-        f"- {candidate['id']}: {candidate['title']}" for candidate in other_jobs
+        f"- {candidate.get('label') or job_label(candidate['title'])}: "
+        f"{candidate['title']} (id: {candidate['id']})"
+        for candidate in other_jobs
     ) or "- none"
     base_summary = format_base_summary(
         str(run_state.get("base_ref") or "HEAD"),
@@ -662,8 +720,9 @@ def build_worker_prompt(job: dict[str, Any], jobs: list[dict[str, Any]], run_sta
         You are one Codex worker in a parallel coding batch.
 
         Batch id: {run_state['run_id']}
-        Assigned job id: {job['id']}
+        Assigned job label: {job.get('label') or job_label(job['title'])}
         Assigned job title: {job['title']}
+        Assigned job id: {job['id']}
         Base state: {base_summary}
 
         You are running inside an isolated Git worktree created from the same base
@@ -772,8 +831,9 @@ def build_reconciler_prompt(root: pathlib.Path, run_dir: pathlib.Path, run_state
     worker_lines = []
     for worker in succeeded:
         files = ", ".join(worker.get("files_changed") or []) or "none"
+        label = worker.get("label") or job_label(worker["title"])
         worker_lines.append(
-            f"- {worker['job_id']}: {worker['title']} | files: {files} | "
+            f"- {label}: {worker['title']} | id: {worker['job_id']} | files: {files} | "
             f"worktree: {rel_to_repo(root, pathlib.Path(worker['worktree']))} | "
             f"diff: {rel_to_repo(root, pathlib.Path(worker['diff_path']))} | "
             f"status: {rel_to_repo(root, pathlib.Path(worker['worker_dir']) / 'git-status.txt')} | "
@@ -782,8 +842,9 @@ def build_reconciler_prompt(root: pathlib.Path, run_dir: pathlib.Path, run_state
 
     failed_lines = []
     for worker in failed:
+        label = worker.get("label") or job_label(worker["title"])
         failed_lines.append(
-            f"- {worker['job_id']}: {worker['title']} | exit {worker.get('exit_code')} | "
+            f"- {label}: {worker['title']} | id: {worker['job_id']} | exit {worker.get('exit_code')} | "
             f"stderr: {rel_to_repo(root, pathlib.Path(worker['stderr_path']))}"
         )
 
@@ -1016,6 +1077,7 @@ def worker_base_state(job: dict[str, Any], worker_dir: pathlib.Path, worktree: p
     return {
         "job_id": job["id"],
         "title": job["title"],
+        "label": job.get("label") or job_label(job["title"]),
         "layer": job["layer"],
         "status": "queued",
         "pid": None,
@@ -1495,6 +1557,7 @@ async def run_batch(args: argparse.Namespace) -> int:
         run_state["jobs"][job["id"]] = {
             "id": job["id"],
             "title": job["title"],
+            "label": job.get("label") or job_label(job["title"]),
             "layer": job["layer"],
             "path": str(claimed_path),
             "body": job["body"],
@@ -1693,17 +1756,19 @@ async def run_live(args: argparse.Namespace) -> int:
         body = body.strip()
         if not body:
             return
-        inferred_title = title or first_heading_or_line(body, "job")
-        job_id = f"{compact_time()}-{random.randrange(100000, 999999)}-{slugify(inferred_title)}"
+        inferred_title = clean_job_title(title or infer_job_title(body, "job"))
+        label = job_label(inferred_title)
+        job_id = make_job_id(inferred_title)
         path = claimed_jobs_dir / f"{job_id}.md"
         archive_path = archive_dir / f"{job_id}.md"
-        content = job_file_content(job_id, body, inferred_title, layer)
+        content = job_file_content(job_id, body, inferred_title, layer, label)
         path.write_text(content)
         archive_path.write_text(content)
 
         job = {
             "id": job_id,
             "title": inferred_title,
+            "label": label,
             "layer": layer,
             "path": str(path),
             "body": body,
@@ -1712,6 +1777,7 @@ async def run_live(args: argparse.Namespace) -> int:
         context.run_state["jobs"][job_id] = {
             "id": job_id,
             "title": inferred_title,
+            "label": label,
             "layer": layer,
             "path": str(path),
             "body": body,
@@ -1723,7 +1789,7 @@ async def run_live(args: argparse.Namespace) -> int:
         context.run_state["phase"] = "workers_running"
         context.save()
         context.event("live_job_received", job_id=job_id, title=inferred_title)
-        print_live(f"queued {job_id}: {inferred_title}")
+        print_live(f"queued {label} ({job_id}): {inferred_title}")
         tasks.append(asyncio.create_task(bounded(job)))
 
     async def cancel_live(reason: str) -> int:
@@ -2059,7 +2125,8 @@ def command_add(args: argparse.Namespace) -> int:
         body = sys.stdin.read()
 
     path = create_job(state, body, args.title, args.layer)
-    print(f"Queued {path.name}")
+    job = job_from_file(path)
+    print(f"Queued {job['label']} ({path.name}): {job['title']}")
     return 0
 
 
@@ -2084,7 +2151,8 @@ def command_capture(args: argparse.Namespace) -> int:
 
     print(f"Queued {len(paths)} job(s):")
     for path in paths:
-        print(f"- {path.name}")
+        job = job_from_file(path)
+        print(f"- {job['label']} ({path.name}): {job['title']}")
 
     if args.run:
         run_args = argparse.Namespace(
@@ -2092,6 +2160,7 @@ def command_capture(args: argparse.Namespace) -> int:
             base=args.base,
             allow_dirty=args.allow_dirty,
             no_reconcile=args.no_reconcile,
+            no_hygiene=args.no_hygiene,
             model=args.model,
             reasoning_effort=args.reasoning_effort,
             danger=args.danger,
@@ -2111,7 +2180,7 @@ def command_list(args: argparse.Namespace) -> int:
     print(f"Queued jobs in {rel_to_repo(root, state / QUEUE_DIR)}:")
     for path in files:
         job = job_from_file(path)
-        print(f"- {path.name}: {job['title']} [layer: {job['layer']}]")
+        print(f"- {job['label']}: {job['title']} [{path.name}, layer: {job['layer']}]")
     return 0
 
 
@@ -2174,8 +2243,10 @@ def command_health(args: argparse.Namespace) -> int:
                 f"{format_duration(prepare.get('duration_seconds'))}"
                 + (f" cache={cache_hits}/{len(steps)}" if steps else "")
             )
+        display = worker.get("label") or worker.get("title") or worker.get("job_id")
         print(
-            f"- {worker.get('job_id')}: {worker.get('status')}"
+            f"- {display}: {worker.get('status')}"
+            f" | id: {worker.get('job_id')}"
             f" | exit: {worker.get('exit_code')}"
             f" | {worker.get('duration_seconds')}s"
             f"{pid_text}{prepare_text}{files_text}"
@@ -2713,7 +2784,8 @@ def command_headful_controller(args: argparse.Namespace) -> int:
         for queued_message in next_batch_messages:
             job_id = headful_submit_prompt(root, run_id, args, controller_pane, queued_message)
             last_submit["monotonic"] = time.monotonic()
-            print(f"started queued message {job_id}: {queued_message[:96]}")
+            title = infer_job_title(queued_message, "job")
+            print(f"started queued message {job_label(title)} ({job_id}): {title}")
         next_batch_messages = []
 
         canceled = headful_input_loop(
@@ -2894,14 +2966,14 @@ async def run_headful_live(args: argparse.Namespace) -> int:
                 if not prompt:
                     continue
                 finish_requested = False
-                title = str(message.get("title") or first_heading_or_line(prompt, "job"))
+                title = clean_job_title(str(message.get("title") or infer_job_title(prompt, "job")))
                 try:
                     job_id = headful_submit_prompt(root, run_id, args, controller_pane, prompt)
                 except FleetError as exc:
                     print_live(f"prompt rejected: {exc}")
                     continue
                 last_submit["monotonic"] = time.monotonic()
-                print_live(f"queued {job_id}: {title}")
+                print_live(f"queued {job_label(title)} ({job_id}): {title}")
                 continue
 
             print_live(f"ignored unknown live message: {line[:120]}")
@@ -3288,7 +3360,8 @@ def headful_input_loop(
                         )
                     else:
                         last_submit["monotonic"] = time.monotonic()
-                        print(f"queued {job_id}: {compact_prompt_preview(prompt)}")
+                        title = infer_job_title(prompt, "job")
+                        print(f"queued {job_label(title)} ({job_id}): {title}")
                 redraw()
                 continue
             if value in {"\x7f", "\b"}:
@@ -3350,15 +3423,16 @@ def headful_submit_prompt(
     if current.get("reconciler") or current.get("phase") in closed_phases:
         raise FleetError("This headful run is closed to new prompts.")
 
-    inferred_title = first_heading_or_line(body, "job")
-    job_id = f"{compact_time()}-{random.randrange(100000, 999999)}-{slugify(inferred_title)}"
+    inferred_title = infer_job_title(body, "job")
+    label = job_label(inferred_title)
+    job_id = make_job_id(inferred_title)
     claimed_jobs_dir = run_dir / "jobs"
     archive_dir = state / ARCHIVE_DIR / run_id
     claimed_jobs_dir.mkdir(parents=True, exist_ok=True)
     archive_dir.mkdir(parents=True, exist_ok=True)
     path = claimed_jobs_dir / f"{job_id}.md"
     archive_path = archive_dir / f"{job_id}.md"
-    content = job_file_content(job_id, body, inferred_title, "default")
+    content = job_file_content(job_id, body, inferred_title, "default", label)
     path.write_text(content)
     archive_path.write_text(content)
 
@@ -3367,6 +3441,7 @@ def headful_submit_prompt(
     job = {
         "id": job_id,
         "title": inferred_title,
+        "label": label,
         "layer": "default",
         "path": str(path),
         "body": body,
@@ -3380,6 +3455,7 @@ def headful_submit_prompt(
         data["jobs"][job_id] = {
             "id": job_id,
             "title": inferred_title,
+            "label": label,
             "layer": "default",
             "path": str(path),
             "body": body,

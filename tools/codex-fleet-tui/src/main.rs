@@ -457,6 +457,7 @@ impl App {
             Some(
                 "reconciler_queued"
                     | "reconciling"
+                    | "hygiene_queued"
                     | "hygiene_running"
                     | "completed"
                     | "canceled"

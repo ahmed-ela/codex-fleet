@@ -3234,6 +3234,7 @@ def headful_submit_prompt(
     closed_phases = {
         "reconciler_queued",
         "reconciling",
+        "hygiene_queued",
         "hygiene_running",
         "completed",
         "canceled",
@@ -3793,10 +3794,15 @@ def command_headful_reconciler(args: argparse.Namespace) -> int:
     (reconciler_dir / "final-git-status.txt").write_text(final_status)
     (reconciler_dir / "final-diff-stat.txt").write_text(final_stat)
     final_snapshot = final_snapshot_metadata(root, "reconciler") if exit_code == 0 else None
+    hygiene_will_run = exit_code == 0 and not args.no_hygiene
 
     def mark_done(data: dict[str, Any]) -> None:
-        data["phase"] = "completed" if exit_code == 0 else "reconciler_failed"
-        data["completed_at"] = now_iso()
+        if exit_code == 0:
+            data["phase"] = "hygiene_queued" if hygiene_will_run else "completed"
+        else:
+            data["phase"] = "reconciler_failed"
+        if not hygiene_will_run:
+            data["completed_at"] = now_iso()
         if final_snapshot:
             data["final_snapshot"] = final_snapshot
         data["reconciler"].update(
@@ -3835,7 +3841,7 @@ def command_headful_reconciler(args: argparse.Namespace) -> int:
         f"reconciler {'done' if exit_code == 0 else 'failed'} "
         f"in {format_duration(duration)}"
     )
-    if exit_code == 0 and not args.no_hygiene:
+    if hygiene_will_run:
         print("Reconciler done; starting hygiene...")
         hygiene_exit = run_headful_hygiene_inline(args, root, run_dir, run_json)
         final_exit_code = hygiene_exit

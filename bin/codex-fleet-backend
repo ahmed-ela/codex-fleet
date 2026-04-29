@@ -538,6 +538,17 @@ def build_worker_prompt(job: dict[str, Any], jobs: list[dict[str, Any]], run_sta
         if base_meta.get("vcs") == "jj"
         else "This base was resolved from Git before the run."
     )
+    retry_note = ""
+    if int(job.get("attempt") or 1) > 1:
+        retry_note = textwrap.dedent(
+            f"""
+
+            Retry context:
+            - This is attempt {job.get('attempt')} for job {job.get('retry_of')}.
+            - Previous failed worker id: {job.get('previous_worker_id')}.
+            - Keep the same assigned scope; do not expand the task because this is a retry.
+            """
+        ).rstrip()
 
     return textwrap.dedent(
         f"""
@@ -553,6 +564,7 @@ def build_worker_prompt(job: dict[str, Any], jobs: list[dict[str, Any]], run_sta
         revision as the other workers. Other workers' changes are not present in
         this checkout.
         {base_note}
+        {retry_note}
 
         Coordination rules:
         - Implement only the assigned job.
@@ -903,6 +915,9 @@ def worker_base_state(job: dict[str, Any], worker_dir: pathlib.Path, worktree: p
         "title": job["title"],
         "label": job.get("label") or job_label(job["title"]),
         "layer": job["layer"],
+        "attempt": int(job.get("attempt") or 1),
+        "retry_of": job.get("retry_of"),
+        "previous_worker_id": job.get("previous_worker_id"),
         "status": "queued",
         "pid": None,
         "exit_code": None,
@@ -919,6 +934,127 @@ def worker_base_state(job: dict[str, Any], worker_dir: pathlib.Path, worktree: p
         "prepare": None,
         "files_changed": [],
     }
+
+
+def worker_attempt(worker: dict[str, Any]) -> int:
+    try:
+        return max(1, int(worker.get("attempt") or 1))
+    except (TypeError, ValueError):
+        return 1
+
+
+def max_worker_retries(args: argparse.Namespace) -> int:
+    try:
+        return max(0, int(getattr(args, "retries", 1) or 0))
+    except (TypeError, ValueError):
+        return 1
+
+
+def active_jobs_for_prompt(run_state: dict[str, Any]) -> list[dict[str, Any]]:
+    workers = run_state.get("workers") or {}
+    jobs = run_state.get("jobs") or {}
+    return [
+        job
+        for job in jobs.values()
+        if (workers.get(job.get("id")) or {}).get("status") != "retried"
+    ]
+
+
+def retryable_failed_workers(run_state: dict[str, Any], retries: int) -> list[dict[str, Any]]:
+    if retries <= 0:
+        return []
+    workers = run_state.get("workers") or {}
+    return [
+        worker
+        for worker in workers.values()
+        if worker.get("status") == "failed"
+        and not worker.get("retried_by")
+        and worker_attempt(worker) <= retries
+    ]
+
+
+def final_workers(run_state: dict[str, Any]) -> list[dict[str, Any]]:
+    return [
+        worker
+        for worker in (run_state.get("workers") or {}).values()
+        if worker.get("status") != "retried"
+    ]
+
+
+def successful_final_workers(run_state: dict[str, Any]) -> list[dict[str, Any]]:
+    return [worker for worker in final_workers(run_state) if worker.get("status") == "succeeded"]
+
+
+def failed_final_workers(run_state: dict[str, Any]) -> list[dict[str, Any]]:
+    return [worker for worker in final_workers(run_state) if worker.get("status") == "failed"]
+
+
+def queue_failed_worker_retries(context: "RunContext", retries: int) -> list[dict[str, Any]]:
+    retry_jobs: list[dict[str, Any]] = []
+    for worker in retryable_failed_workers(context.run_state, retries):
+        source_job_id = str(worker.get("retry_of") or worker.get("job_id"))
+        source_job = context.run_state.get("jobs", {}).get(source_job_id)
+        if not source_job:
+            worker["retry_skipped"] = "source job was not found"
+            continue
+
+        attempt = worker_attempt(worker) + 1
+        title = str(source_job["title"])
+        label = str(source_job.get("label") or job_label(title))
+        retry_id = make_job_id(title)
+        retry_job = {
+            "id": retry_id,
+            "title": title,
+            "label": label,
+            "layer": source_job.get("layer") or "default",
+            "body": source_job["body"],
+            "attempt": attempt,
+            "retry_of": source_job_id,
+            "previous_worker_id": worker.get("job_id"),
+            "meta": {},
+        }
+
+        claimed_jobs_dir = context.run_dir / "jobs"
+        archive_dir = context.state / ARCHIVE_DIR / context.run_state["run_id"]
+        claimed_jobs_dir.mkdir(parents=True, exist_ok=True)
+        archive_dir.mkdir(parents=True, exist_ok=True)
+        path = claimed_jobs_dir / f"{retry_id}.md"
+        archive_path = archive_dir / f"{retry_id}.md"
+        content = job_file_content(retry_id, retry_job["body"], title, retry_job["layer"], label)
+        path.write_text(content)
+        archive_path.write_text(content)
+        retry_job["path"] = str(path)
+
+        worker["status"] = "retried"
+        worker["retried_by"] = retry_id
+        worker["retried_at"] = now_iso()
+
+        context.run_state["jobs"][retry_id] = {
+            "id": retry_id,
+            "title": title,
+            "label": label,
+            "layer": retry_job["layer"],
+            "path": str(path),
+            "body": retry_job["body"],
+            "attempt": attempt,
+            "retry_of": source_job_id,
+            "previous_worker_id": worker.get("job_id"),
+        }
+        worker_dir = context.run_dir / "workers" / retry_id
+        worktree = context.state / WORKTREES_DIR / context.run_state["run_id"] / retry_id
+        context.run_state["workers"][retry_id] = worker_base_state(retry_job, worker_dir, worktree)
+        retry_jobs.append(retry_job)
+
+    if retry_jobs:
+        context.run_state["phase"] = "workers_retrying"
+        context.save()
+        context.event(
+            "worker_retries_queued",
+            count=len(retry_jobs),
+            retries=retries,
+            job_ids=[job["id"] for job in retry_jobs],
+        )
+    return retry_jobs
 
 
 class RunContext:
@@ -1008,7 +1144,7 @@ async def run_worker(
     )
     context.save()
 
-    prompt = build_worker_prompt(job, list(context.run_state["jobs"].values()), context.run_state)
+    prompt = build_worker_prompt(job, active_jobs_for_prompt(context.run_state), context.run_state)
     pathlib.Path(worker["prompt_path"]).write_text(prompt)
 
     cmd = ["codex"]
@@ -1346,6 +1482,7 @@ async def run_batch(args: argparse.Namespace) -> int:
         "completed_at": None,
         "phase": "dispatching",
         "concurrency": args.jobs,
+        "worker_retries": max_worker_retries(args),
         "model": model,
         "reasoning_effort": reasoning_effort,
         "jobs": {},
@@ -1417,16 +1554,22 @@ async def run_batch(args: argparse.Namespace) -> int:
                 f"({len(worker.get('files_changed') or [])} files)"
             )
 
+    async def run_retry_rounds() -> None:
+        retries = max_worker_retries(args)
+        while True:
+            retry_jobs = queue_failed_worker_retries(context, retries)
+            if not retry_jobs:
+                return
+            print_live(f"retrying {len(retry_jobs)} failed worker(s)")
+            await asyncio.gather(*(bounded(job) for job in retry_jobs))
+
     context.run_state["phase"] = "workers_running"
     context.save()
     await asyncio.gather(*(bounded(job) for job in jobs))
+    await run_retry_rounds()
 
-    succeeded = [
-        worker for worker in context.run_state["workers"].values() if worker["status"] == "succeeded"
-    ]
-    failed = [
-        worker for worker in context.run_state["workers"].values() if worker["status"] == "failed"
-    ]
+    succeeded = successful_final_workers(context.run_state)
+    failed = failed_final_workers(context.run_state)
     context.event("workers_completed", succeeded=len(succeeded), failed=len(failed))
 
     if args.no_reconcile:
@@ -1443,7 +1586,7 @@ async def run_batch(args: argparse.Namespace) -> int:
         print("No workers succeeded; reconciler skipped.")
         return 1
 
-    if len(context.run_state["workers"]) == 1 and len(succeeded) == 1:
+    if len(final_workers(context.run_state)) == 1 and len(succeeded) == 1:
         try:
             direct_apply = apply_single_worker_to_checkout(root, succeeded[0])
         except FleetError as exc:
@@ -1537,6 +1680,7 @@ async def run_live(args: argparse.Namespace) -> int:
         "completed_at": None,
         "phase": "input_open",
         "concurrency": args.jobs,
+        "worker_retries": max_worker_retries(args),
         "model": model,
         "reasoning_effort": reasoning_effort,
         "jobs": {},
@@ -1575,6 +1719,15 @@ async def run_live(args: argparse.Namespace) -> int:
                 f"in {format_duration(worker.get('duration_seconds'))} "
                 f"({len(worker.get('files_changed') or [])} files)"
             )
+
+    async def run_retry_rounds() -> None:
+        retries = max_worker_retries(args)
+        while True:
+            retry_jobs = queue_failed_worker_retries(context, retries)
+            if not retry_jobs:
+                return
+            print_live(f"retrying {len(retry_jobs)} failed worker(s)")
+            await asyncio.gather(*(bounded(job) for job in retry_jobs))
 
     async def submit_prompt(body: str, layer: str = "default", title: str | None = None) -> None:
         body = body.strip()
@@ -1702,13 +1855,10 @@ async def run_live(args: argparse.Namespace) -> int:
 
     if tasks:
         await asyncio.gather(*tasks)
+    await run_retry_rounds()
 
-    succeeded = [
-        worker for worker in context.run_state["workers"].values() if worker["status"] == "succeeded"
-    ]
-    failed = [
-        worker for worker in context.run_state["workers"].values() if worker["status"] == "failed"
-    ]
+    succeeded = successful_final_workers(context.run_state)
+    failed = failed_final_workers(context.run_state)
     context.event("workers_completed", succeeded=len(succeeded), failed=len(failed))
 
     if args.no_reconcile:
@@ -1732,7 +1882,7 @@ async def run_live(args: argparse.Namespace) -> int:
         print_live("No workers succeeded; reconciler skipped.")
         return 1
 
-    if len(context.run_state["workers"]) == 1 and len(succeeded) == 1:
+    if len(final_workers(context.run_state)) == 1 and len(succeeded) == 1:
         try:
             direct_apply = apply_single_worker_to_checkout(root, succeeded[0])
         except FleetError as exc:
@@ -1987,6 +2137,7 @@ def command_capture(args: argparse.Namespace) -> int:
             no_hygiene=args.no_hygiene,
             model=args.model,
             reasoning_effort=args.reasoning_effort,
+            retries=args.retries,
             danger=args.danger,
             search=args.search,
         )
@@ -2398,9 +2549,14 @@ def headful_spawn_pane(
     controller_height: int = 7,
 ) -> str:
     if split_target:
-        split_flag = split_axis if split_axis in {"-h", "-v"} else "-h"
-        split_args = [split_flag, "-d"]
-        target = split_target
+        probe = headful_tmux(["display-message", "-p", "-t", split_target, "#{pane_id}"], check=False)
+        if probe.returncode == 0:
+            split_flag = split_axis if split_axis in {"-h", "-v"} else "-h"
+            split_args = [split_flag, "-d"]
+            target = split_target
+        else:
+            split_args = ["-v", "-b", "-d"]
+            target = controller_pane
     else:
         split_args = ["-v", "-b", "-d"]
         target = controller_pane
@@ -2423,6 +2579,33 @@ def headful_spawn_pane(
         headful_tmux(["resize-pane", "-t", controller_pane, "-y", str(controller_height)], check=False)
         headful_tmux(["select-pane", "-t", controller_pane], check=False)
     return pane
+
+
+def headful_existing_panes(controller_pane: str) -> set[str]:
+    if not controller_pane:
+        return set()
+    session_result = headful_tmux(
+        ["display-message", "-p", "-t", controller_pane, "#{session_name}"],
+        check=False,
+    )
+    if session_result.returncode != 0:
+        return set()
+    result = headful_tmux(
+        ["list-panes", "-t", session_result.stdout.strip(), "-F", "#{pane_id}"],
+        check=False,
+    )
+    if result.returncode != 0:
+        return set()
+    return {line.strip() for line in result.stdout.splitlines() if line.strip()}
+
+
+def headful_visible_worker_panes(data: dict[str, Any], controller_pane: str) -> list[str]:
+    existing = headful_existing_panes(controller_pane)
+    return [
+        str(worker.get("pane_id"))
+        for worker in (data.get("workers") or {}).values()
+        if worker.get("pane_id") and str(worker.get("pane_id")) in existing
+    ]
 
 
 def headful_worker_command(args: argparse.Namespace, run_id: str, job_id: str) -> list[str]:
@@ -2486,6 +2669,8 @@ def command_headful(args: argparse.Namespace) -> int:
         effective_model(args),
         "--reasoning-effort",
         effective_reasoning_effort(args),
+        "--retries",
+        str(args.retries),
     ]
     if args.base:
         cmd.extend(["--base", args.base])
@@ -2550,6 +2735,7 @@ def command_headful_controller(args: argparse.Namespace) -> int:
             "completed_at": None,
             "phase": "input_open",
             "concurrency": args.jobs,
+            "worker_retries": max_worker_retries(args),
             "model": effective_model(args),
             "reasoning_effort": effective_reasoning_effort(args),
             "jobs": {},
@@ -2701,6 +2887,7 @@ async def run_headful_live(args: argparse.Namespace) -> int:
             "completed_at": None,
             "phase": "input_open",
             "concurrency": args.jobs,
+            "worker_retries": max_worker_retries(args),
             "model": model,
             "reasoning_effort": reasoning_effort,
             "jobs": {},
@@ -3298,12 +3485,7 @@ def headful_submit_prompt(
             archive_path.unlink()
         raise
     headful_event(run_dir, "headful_job_received", job_id=job_id, title=inferred_title)
-    current_workers = (current.get("workers") or {}).values()
-    visible_worker_panes = [
-        str(worker.get("pane_id"))
-        for worker in current_workers
-        if worker.get("pane_id")
-    ]
+    visible_worker_panes = headful_visible_worker_panes(current, controller_pane)
     split_target = visible_worker_panes[-1] if visible_worker_panes else None
     split_axis = "-h" if len(visible_worker_panes) % 2 == 1 else "-v"
     pane = headful_spawn_pane(
@@ -3322,6 +3504,47 @@ def headful_submit_prompt(
     return job_id
 
 
+def headful_queue_failed_retries(
+    root: pathlib.Path,
+    state: pathlib.Path,
+    run_dir: pathlib.Path,
+    run_json: pathlib.Path,
+    run_id: str,
+    args: argparse.Namespace,
+    controller_pane: str,
+) -> int:
+    data = json.loads(run_json.read_text())
+    context = RunContext(root, state, run_dir, data)
+    retry_jobs = queue_failed_worker_retries(context, max_worker_retries(args))
+    for job in retry_jobs:
+        latest = json.loads(run_json.read_text())
+        visible_worker_panes = headful_visible_worker_panes(latest, controller_pane)
+        split_target = visible_worker_panes[-1] if visible_worker_panes else None
+        split_axis = "-h" if len(visible_worker_panes) % 2 == 1 else "-v"
+        pane = headful_spawn_pane(
+            root,
+            controller_pane,
+            headful_worker_command(args, run_id, job["id"]),
+            split_target=split_target,
+            split_axis=split_axis,
+            controller_height=headful_workspace_height(args),
+        )
+
+        def record_pane(state: dict[str, Any]) -> None:
+            state["workers"][job["id"]]["pane_id"] = pane
+
+        lock_run_state(run_json, record_pane)
+        headful_event(
+            run_dir,
+            "headful_worker_retry_queued",
+            job_id=job["id"],
+            retry_of=job.get("retry_of"),
+            attempt=job.get("attempt"),
+            pane_id=pane,
+        )
+    return len(retry_jobs)
+
+
 def headful_monitor_loop(
     root: pathlib.Path,
     run_id: str,
@@ -3330,7 +3553,7 @@ def headful_monitor_loop(
     stop_input: threading.Event,
     last_submit: dict[str, float],
 ) -> None:
-    _state, run_dir, run_json = headful_run_paths(root, run_id)
+    state, run_dir, run_json = headful_run_paths(root, run_id)
     reconcile_started = False
 
     while True:
@@ -3348,14 +3571,27 @@ def headful_monitor_loop(
         workers = data.get("workers") or {}
         if not workers or data.get("reconciler") or reconcile_started:
             continue
-        if any(worker.get("status") not in {"succeeded", "failed", "canceled"} for worker in workers.values()):
+        if any(worker.get("status") not in {"succeeded", "failed", "canceled", "retried"} for worker in workers.values()):
             continue
         input_finished = bool((data.get("headful") or {}).get("input_finished"))
         quiet_long_enough = time.monotonic() - last_submit["monotonic"] >= args.auto_reconcile_delay
         if not input_finished and not quiet_long_enough:
             continue
 
-        succeeded = [worker for worker in workers.values() if worker.get("status") == "succeeded"]
+        retry_count = headful_queue_failed_retries(
+            root,
+            state,
+            run_dir,
+            run_json,
+            run_id,
+            args,
+            controller_pane,
+        )
+        if retry_count:
+            headful_event(run_dir, "headful_worker_retries_started", count=retry_count)
+            continue
+
+        succeeded = successful_final_workers(data)
         if not succeeded:
             def mark_no_success(state: dict[str, Any]) -> None:
                 state["phase"] = "no_successful_workers"
@@ -3366,7 +3602,7 @@ def headful_monitor_loop(
             stop_input.set()
             return
 
-        if len(workers) == 1 and len(succeeded) == 1:
+        if len(final_workers(data)) == 1 and len(succeeded) == 1:
             try:
                 direct_apply = apply_single_worker_to_checkout(root, succeeded[0])
             except FleetError as exc:
@@ -3542,7 +3778,7 @@ def command_headful_worker(args: argparse.Namespace) -> int:
         steps=len(prepare_summary.get("steps") or []),
     )
 
-    prompt = build_worker_prompt(job, list(data["jobs"].values()), data)
+    prompt = build_worker_prompt(job, active_jobs_for_prompt(data), data)
     pathlib.Path(worker["prompt_path"]).write_text(prompt)
 
     cmd = ["codex", "--no-alt-screen"]
@@ -3864,6 +4100,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sub = parser.add_subparsers(dest="command", metavar="command", required=True)
 
+    def add_retries_arg(command: argparse.ArgumentParser) -> None:
+        command.add_argument(
+            "--retries",
+            type=int,
+            default=1,
+            help="retry failed workers before reconciling; default: 1, use 0 to disable",
+        )
+
     quick = sub.add_parser(
         "quick",
         help="capture prompts and run immediately; this is also the bare-command default",
@@ -3876,6 +4120,7 @@ def build_parser() -> argparse.ArgumentParser:
     quick.add_argument("--allow-dirty", action="store_true", help="allow reconciling onto a dirty checkout")
     quick.add_argument("--no-reconcile", action="store_true", help="run workers only")
     quick.add_argument("--no-hygiene", action="store_true", help="skip post-reconcile hygiene")
+    add_retries_arg(quick)
     quick.add_argument("--model", default=DEFAULT_MODEL, help=f"Codex model; default: {DEFAULT_MODEL}")
     quick.add_argument(
         "--reasoning-effort",
@@ -3904,6 +4149,7 @@ def build_parser() -> argparse.ArgumentParser:
                 allow_dirty=args.allow_dirty,
                 no_reconcile=args.no_reconcile,
                 no_hygiene=args.no_hygiene,
+                retries=args.retries,
                 model=args.model,
                 reasoning_effort=args.reasoning_effort,
                 danger=not args.safe,
@@ -3931,6 +4177,7 @@ def build_parser() -> argparse.ArgumentParser:
     capture.add_argument("--allow-dirty", action="store_true", help="allow reconciling onto a dirty checkout")
     capture.add_argument("--no-reconcile", action="store_true", help="run workers only")
     capture.add_argument("--no-hygiene", action="store_true", help="skip post-reconcile hygiene")
+    add_retries_arg(capture)
     capture.add_argument("--model", default=DEFAULT_MODEL, help=f"Codex model; default: {DEFAULT_MODEL}")
     capture.add_argument(
         "--reasoning-effort",
@@ -3950,6 +4197,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--allow-dirty", action="store_true", help="allow reconciling onto a dirty checkout")
     run.add_argument("--no-reconcile", action="store_true", help="run workers only")
     run.add_argument("--no-hygiene", action="store_true", help="skip post-reconcile hygiene")
+    add_retries_arg(run)
     run.add_argument("--model", default=DEFAULT_MODEL, help=f"Codex model; default: {DEFAULT_MODEL}")
     run.add_argument(
         "--reasoning-effort",
@@ -3976,6 +4224,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     headful.add_argument("--no-reconcile", action="store_true", help="run workers only")
     headful.add_argument("--no-hygiene", action="store_true", help="skip post-reconcile hygiene")
+    add_retries_arg(headful)
     headful.add_argument("--model", default=DEFAULT_MODEL, help=f"Codex model; default: {DEFAULT_MODEL}")
     headful.add_argument(
         "--reasoning-effort",
@@ -4012,6 +4261,7 @@ def build_parser() -> argparse.ArgumentParser:
     headful_controller.add_argument("--allow-dirty", action="store_true")
     headful_controller.add_argument("--no-reconcile", action="store_true")
     headful_controller.add_argument("--no-hygiene", action="store_true")
+    add_retries_arg(headful_controller)
     headful_controller.add_argument("--model", default=DEFAULT_MODEL)
     headful_controller.add_argument("--reasoning-effort", default=DEFAULT_REASONING_EFFORT)
     headful_controller.add_argument("--safe", action="store_true")
@@ -4045,6 +4295,7 @@ def build_parser() -> argparse.ArgumentParser:
     headful_live.add_argument("--allow-dirty", action="store_true")
     headful_live.add_argument("--no-reconcile", action="store_true")
     headful_live.add_argument("--no-hygiene", action="store_true")
+    add_retries_arg(headful_live)
     headful_live.add_argument("--model", default=DEFAULT_MODEL)
     headful_live.add_argument("--reasoning-effort", default=DEFAULT_REASONING_EFFORT)
     headful_live.add_argument("--danger", action="store_true")
@@ -4064,6 +4315,7 @@ def build_parser() -> argparse.ArgumentParser:
     live.add_argument("--allow-dirty", action="store_true", help="allow reconciling onto a dirty checkout")
     live.add_argument("--no-reconcile", action="store_true", help="run workers only")
     live.add_argument("--no-hygiene", action="store_true", help="skip post-reconcile hygiene")
+    add_retries_arg(live)
     live.add_argument("--model", default=DEFAULT_MODEL, help=f"Codex model; default: {DEFAULT_MODEL}")
     live.add_argument(
         "--reasoning-effort",

@@ -456,6 +456,7 @@ impl App {
             self.phase.as_deref(),
             Some(
                 "reconciler_queued"
+                    | "workers_retrying"
                     | "reconciling"
                     | "hygiene_queued"
                     | "hygiene_running"
@@ -1609,14 +1610,14 @@ fn style_for_status(status: &str) -> Style {
     match status {
         "succeeded" => Style::default().fg(Color::Green),
         "failed" => Style::default().fg(Color::Red),
-        "canceled" => Style::default().fg(Color::Yellow),
+        "canceled" | "retried" => Style::default().fg(Color::Yellow),
         "running" | "preparing" | "queued" | "submitted" => Style::default().fg(Color::Cyan),
         _ => Style::default().fg(Color::Gray),
     }
 }
 
 fn is_terminal_status(status: &str) -> bool {
-    matches!(status, "succeeded" | "failed" | "canceled")
+    matches!(status, "succeeded" | "failed" | "canceled" | "retried")
 }
 
 fn read_workspace_pane_preview(value: &Value) -> Vec<String> {

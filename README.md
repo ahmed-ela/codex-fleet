@@ -21,6 +21,23 @@ Bare `codex-fleet` opens the Ratatui UI by default. The older tmux controller is
 
 The backend defaults to `gpt-5.5` with `xhigh` reasoning. In a jj-backed repo, Fleet snapshots `jj @` before a batch and uses that exact commit as the worker base. Workers still use git worktrees for broad tool compatibility, and Fleet records the final jj snapshot after direct apply or reconciliation. Git/GitHub remain the publish layer; push to `main` after the final reconciled checkout is the state you want.
 
+## Reconcile And Hygiene
+
+Multi-worker batches run through:
+
+```text
+Workers -> Reconciler -> Hygiene -> Done
+```
+
+The reconciler merges successful worker changes into the main checkout. Hygiene then does a final stabilization pass for common LLM-generated-code residue: inconsistent naming, partial renames, stale imports, duplicate implementations, broken call sites, formatting/check failures, and oversized modules created by overlap.
+
+Hygiene preserves product intent and is skipped for the single-worker direct-apply path. Disable it when needed:
+
+```sh
+codex-fleet run --no-hygiene
+codex-fleet hygiene --run <run-id>
+```
+
 ## Publish
 
 Fleet treats GitHub as the trunk/publish layer, not as a branch per worker. After a local batch is reconciled and the checkout looks right, publish it explicitly:

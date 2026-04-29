@@ -831,6 +831,63 @@ def build_reconciler_prompt(root: pathlib.Path, run_dir: pathlib.Path, run_state
     ).strip() + "\n"
 
 
+def build_hygiene_prompt(root: pathlib.Path, run_dir: pathlib.Path, run_state: dict[str, Any]) -> str:
+    reconciler = run_state.get("reconciler") or {}
+    current_status = run_cmd(["git", "status", "--short"], cwd=root, check=False).stdout.strip()
+    current_stat = run_cmd(["git", "diff", "--stat"], cwd=root, check=False).stdout.strip()
+    return textwrap.dedent(
+        f"""
+        You are the final code hygiene agent after a multi-agent reconciliation.
+
+        Batch id: {run_state['run_id']}
+        Repo root: {root}
+        Run artifacts directory: {rel_to_repo(root, run_dir)}
+        Reconciler summary: {rel_to_repo(root, pathlib.Path(reconciler.get('last_message_path', run_dir / 'reconciler' / 'last_message.md')))}
+
+        Goal:
+        Stabilize the reconciled code without changing product intent.
+
+        Focus on common LLM-generated-code pitfalls:
+        - inconsistent variable, component, function, route, or state names
+        - partially propagated renames or API signature changes
+        - duplicate implementations or dead branches from overlapping agents
+        - stale imports, unused code, unreachable code, and copy/paste residue
+        - inconsistent UI labels/state names after a deliberate pivot
+        - broken type contracts, test assumptions, or call sites
+        - bloated god modules created during merging
+        - missing propagation across related files
+        - formatting, lint, typecheck, or focused test failures
+
+        Rules:
+        - Preserve the reconciler's intended feature behavior.
+        - Prefer small, mechanical, low-risk fixes.
+        - Do not add new product behavior.
+        - Do not re-interpret the original worker prompts.
+        - Do not commit.
+        - Do not edit .codex-fleet artifacts.
+        - If a broader refactor is needed, leave a clear note instead of doing it blindly.
+        - Run available focused checks and fix failures caused by reconciliation.
+
+        Current checkout status before hygiene:
+        ```text
+        {current_status or '(clean)'}
+        ```
+
+        Current diff stat before hygiene:
+        ```text
+        {current_stat or '(no diff stat)'}
+        ```
+
+        Final response contract:
+        - Summarize hygiene changes.
+        - List files changed.
+        - List checks run and their result.
+        - List anything intentionally left for a later refactor.
+        - List remaining risks.
+        """
+    ).strip() + "\n"
+
+
 def files_from_status(status: str) -> list[str]:
     files: list[str] = []
     for line in status.splitlines():
@@ -1237,6 +1294,133 @@ async def run_reconciler(
     context.save()
 
 
+async def run_hygiene(
+    context: RunContext,
+    model: str,
+    reasoning_effort: str,
+    danger: bool,
+    search: bool,
+) -> None:
+    root = context.root
+    run_dir = context.run_dir
+    hygiene_dir = run_dir / "hygiene"
+    hygiene_dir.mkdir(parents=True, exist_ok=True)
+
+    prompt = build_hygiene_prompt(root, run_dir, context.run_state)
+    prompt_path = hygiene_dir / "prompt.md"
+    stdout_path = hygiene_dir / "stdout.jsonl"
+    stderr_path = hygiene_dir / "stderr.log"
+    last_message_path = hygiene_dir / "last_message.md"
+    prompt_path.write_text(prompt)
+
+    cmd = ["codex"]
+    if search:
+        cmd.append("--search")
+    cmd.extend(["exec", "--cd", str(root), "--json", "-o", str(last_message_path)])
+    add_model_args(cmd, model, reasoning_effort)
+    if danger:
+        cmd.append("--dangerously-bypass-approvals-and-sandbox")
+    else:
+        cmd.extend(["--ask-for-approval", "never", "--sandbox", "workspace-write"])
+    cmd.append("-")
+
+    hygiene = {
+        "status": "running",
+        "pid": None,
+        "started_at": now_iso(),
+        "completed_at": None,
+        "duration_seconds": None,
+        "exit_code": None,
+        "prompt_path": str(prompt_path),
+        "stdout_path": str(stdout_path),
+        "stderr_path": str(stderr_path),
+        "last_message_path": str(last_message_path),
+        "command": cmd,
+    }
+    context.run_state["hygiene"] = hygiene
+    context.run_state["phase"] = "hygiene_running"
+    context.save()
+    context.event("hygiene_start", command=cmd)
+
+    start = time.monotonic()
+    with stdout_path.open("wb") as stdout_file, stderr_path.open("wb") as stderr_file:
+        process = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=stdout_file,
+            stderr=stderr_file,
+            start_new_session=True,
+        )
+        hygiene["pid"] = process.pid
+        context.save()
+        await process.communicate(prompt.encode())
+
+    duration = time.monotonic() - start
+    hygiene["exit_code"] = process.returncode
+    hygiene["completed_at"] = now_iso()
+    hygiene["duration_seconds"] = round(duration, 2)
+    hygiene["pid_alive"] = False
+
+    final_status = run_cmd(["git", "status", "--short"], cwd=root, check=False).stdout
+    final_stat = run_cmd(["git", "diff", "--stat"], cwd=root, check=False).stdout
+    (hygiene_dir / "final-git-status.txt").write_text(final_status)
+    (hygiene_dir / "final-diff-stat.txt").write_text(final_stat)
+    hygiene["final_git_status_path"] = str(hygiene_dir / "final-git-status.txt")
+    hygiene["final_diff_stat_path"] = str(hygiene_dir / "final-diff-stat.txt")
+
+    if process.returncode == 0:
+        hygiene["status"] = "succeeded"
+        context.run_state["phase"] = "completed"
+        attach_final_snapshot_context(context, "hygiene")
+        context.event("hygiene_succeeded", duration_seconds=hygiene["duration_seconds"])
+    else:
+        hygiene["status"] = "failed"
+        context.run_state["phase"] = "hygiene_failed"
+        context.event(
+            "hygiene_failed",
+            exit_code=process.returncode,
+            duration_seconds=hygiene["duration_seconds"],
+        )
+    context.save()
+
+
+async def run_hygiene_after_reconcile(
+    context: RunContext,
+    args: argparse.Namespace,
+    model: str,
+    reasoning_effort: str,
+    live: bool = False,
+) -> bool:
+    if getattr(args, "no_hygiene", False):
+        return True
+    reconciler = context.run_state.get("reconciler") or {}
+    if reconciler.get("status") != "succeeded":
+        return False
+    if live:
+        print_live("reconciler succeeded; starting hygiene")
+    else:
+        print("Reconciler succeeded; starting hygiene.")
+    await run_hygiene(
+        context,
+        model=model,
+        reasoning_effort=reasoning_effort,
+        danger=getattr(args, "danger", False),
+        search=getattr(args, "search", False),
+    )
+    hygiene = context.run_state.get("hygiene") or {}
+    if live:
+        print_live(
+            f"hygiene {hygiene.get('status')} "
+            f"in {format_duration(hygiene.get('duration_seconds'))}"
+        )
+    else:
+        print(
+            f"Hygiene {hygiene.get('status')} "
+            f"in {format_duration(hygiene.get('duration_seconds'))}."
+        )
+    return hygiene.get("status") == "succeeded"
+
+
 async def run_batch(args: argparse.Namespace) -> int:
     root = git_root()
     state = ensure_state(root)
@@ -1281,6 +1465,7 @@ async def run_batch(args: argparse.Namespace) -> int:
         "jobs": {},
         "workers": {},
         "reconciler": None,
+        "hygiene": None,
     }
 
     context = RunContext(root, state, run_dir, run_state)
@@ -1408,17 +1593,25 @@ async def run_batch(args: argparse.Namespace) -> int:
         danger=args.danger,
         search=args.search,
     )
+    hygiene_ok = await run_hygiene_after_reconcile(
+        context,
+        args,
+        model=model,
+        reasoning_effort=reasoning_effort,
+    )
     context.run_state["completed_at"] = now_iso()
     context.save()
 
     reconciler = context.run_state["reconciler"] or {}
+    hygiene = context.run_state.get("hygiene") or {}
+    hygiene_text = f", hygiene {hygiene.get('status')}" if hygiene else ""
     print(
         "Run finished: "
         f"{len(succeeded)} worker(s) succeeded, {len(failed)} failed, "
-        f"reconciler {reconciler.get('status')}."
+        f"reconciler {reconciler.get('status')}{hygiene_text}."
     )
     print(f"Check health: codex-fleet health --run {run_id}")
-    return 0 if reconciler.get("status") == "succeeded" and not failed else 1
+    return 0 if reconciler.get("status") == "succeeded" and hygiene_ok and not failed else 1
 
 
 async def run_live(args: argparse.Namespace) -> int:
@@ -1462,6 +1655,7 @@ async def run_live(args: argparse.Namespace) -> int:
         "jobs": {},
         "workers": {},
         "reconciler": None,
+        "hygiene": None,
         "mode": "live",
     }
 
@@ -1683,7 +1877,15 @@ async def run_live(args: argparse.Namespace) -> int:
         danger=args.danger,
         search=args.search,
     )
+    hygiene_ok = await run_hygiene_after_reconcile(
+        context,
+        args,
+        model=model,
+        reasoning_effort=reasoning_effort,
+        live=True,
+    )
     reconciler = context.run_state["reconciler"] or {}
+    hygiene = context.run_state.get("hygiene") or {}
     print_live(
         f"reconciler {reconciler.get('status')} "
         f"in {format_duration(reconciler.get('duration_seconds'))}"
@@ -1694,10 +1896,11 @@ async def run_live(args: argparse.Namespace) -> int:
     print_live(
         "Live run finished: "
         f"{len(succeeded)} worker(s) succeeded, {len(failed)} failed, "
-        f"reconciler {reconciler.get('status')}."
+        f"reconciler {reconciler.get('status')}"
+        + (f", hygiene {hygiene.get('status')}." if hygiene else ".")
     )
     print_live(f"Check health: codex-fleet health --run {run_id}")
-    return 0 if reconciler.get("status") == "succeeded" and not failed else 1
+    return 0 if reconciler.get("status") == "succeeded" and hygiene_ok and not failed else 1
 
 
 async def run_reconcile_existing(args: argparse.Namespace) -> int:
@@ -1731,6 +1934,32 @@ async def run_reconcile_existing(args: argparse.Namespace) -> int:
 
     existing = run_state.get("reconciler")
     if existing and existing.get("status") == "succeeded" and not args.force:
+        if not args.no_hygiene and not (
+            (run_state.get("hygiene") or {}).get("status") == "succeeded"
+        ):
+            model = args.model or run_state.get("model") or DEFAULT_MODEL
+            reasoning_effort = (
+                args.reasoning_effort
+                or run_state.get("reasoning_effort")
+                or DEFAULT_REASONING_EFFORT
+            )
+            context = RunContext(root, state, run_dir, run_state)
+            print(f"Run {run_id} is already reconciled; running missing hygiene.")
+            await run_hygiene(
+                context,
+                model=model,
+                reasoning_effort=reasoning_effort,
+                danger=args.danger,
+                search=args.search,
+            )
+            hygiene = context.run_state.get("hygiene") or {}
+            context.run_state["completed_at"] = now_iso()
+            context.save()
+            print(
+                f"Hygiene {hygiene.get('status')} "
+                f"in {format_duration(hygiene.get('duration_seconds'))}."
+            )
+            return 0 if hygiene.get("status") == "succeeded" else 1
         print(f"Run {run_id} is already reconciled.")
         return 0
 
@@ -1749,14 +1978,73 @@ async def run_reconcile_existing(args: argparse.Namespace) -> int:
         danger=args.danger,
         search=args.search,
     )
+    hygiene_ok = await run_hygiene_after_reconcile(
+        context,
+        args,
+        model=model,
+        reasoning_effort=reasoning_effort,
+    )
     reconciler = context.run_state["reconciler"] or {}
+    hygiene = context.run_state.get("hygiene") or {}
     context.run_state["completed_at"] = now_iso()
     context.save()
     print(
         f"Reconciler {reconciler.get('status')} "
         f"in {format_duration(reconciler.get('duration_seconds'))}."
     )
-    return 0 if reconciler.get("status") == "succeeded" else 1
+    if hygiene:
+        print(
+            f"Hygiene {hygiene.get('status')} "
+            f"in {format_duration(hygiene.get('duration_seconds'))}."
+        )
+    return 0 if reconciler.get("status") == "succeeded" and hygiene_ok else 1
+
+
+async def run_hygiene_existing(args: argparse.Namespace) -> int:
+    root = git_root()
+    state = ensure_state(root)
+    run_id = args.run or latest_run_id(state)
+    if not run_id:
+        raise FleetError("No run found for hygiene.")
+
+    run_dir = state / RUNS_DIR / run_id
+    run_json = run_dir / "run.json"
+    if not run_json.exists():
+        raise FleetError(f"Run state not found: {run_json}")
+
+    run_state = json.loads(run_json.read_text())
+    reconciler = run_state.get("reconciler") or {}
+    if reconciler.get("status") != "succeeded" and not args.force:
+        raise FleetError("Hygiene requires a successful reconciler. Use --force to run anyway.")
+
+    existing = run_state.get("hygiene")
+    if existing and existing.get("status") == "succeeded" and not args.force:
+        print(f"Run {run_id} already has successful hygiene.")
+        return 0
+
+    model = args.model or run_state.get("model") or DEFAULT_MODEL
+    reasoning_effort = (
+        args.reasoning_effort
+        or run_state.get("reasoning_effort")
+        or DEFAULT_REASONING_EFFORT
+    )
+    context = RunContext(root, state, run_dir, run_state)
+    print(f"Running hygiene for run {run_id}.")
+    await run_hygiene(
+        context,
+        model=model,
+        reasoning_effort=reasoning_effort,
+        danger=args.danger,
+        search=args.search,
+    )
+    hygiene = context.run_state.get("hygiene") or {}
+    context.run_state["completed_at"] = now_iso()
+    context.save()
+    print(
+        f"Hygiene {hygiene.get('status')} "
+        f"in {format_duration(hygiene.get('duration_seconds'))}."
+    )
+    return 0 if hygiene.get("status") == "succeeded" else 1
 
 
 def command_add(args: argparse.Namespace) -> int:
@@ -1905,6 +2193,18 @@ def command_health(args: argparse.Namespace) -> int:
     else:
         print("Reconciler: not started")
 
+    hygiene = data.get("hygiene")
+    if hygiene:
+        pid = hygiene.get("pid")
+        alive = pid_alive(pid)
+        print(
+            f"Hygiene: {hygiene.get('status')} | exit: {hygiene.get('exit_code')} "
+            f"| {hygiene.get('duration_seconds')}s"
+            + (f" | pid: {pid} alive={alive}" if pid else "")
+        )
+    else:
+        print("Hygiene: not started")
+
     direct_apply = data.get("direct_apply")
     if direct_apply:
         copied = ", ".join(direct_apply.get("copied_files") or [])
@@ -1977,6 +2277,12 @@ def command_logs(args: argparse.Namespace) -> int:
         paths = [
             pathlib.Path(reconciler.get("last_message_path", run_dir / "reconciler" / "last_message.md")),
             pathlib.Path(reconciler.get("stderr_path", run_dir / "reconciler" / "stderr.log")),
+        ]
+    elif target == "hygiene":
+        hygiene = data.get("hygiene") or {}
+        paths = [
+            pathlib.Path(hygiene.get("last_message_path", run_dir / "hygiene" / "last_message.md")),
+            pathlib.Path(hygiene.get("stderr_path", run_dir / "hygiene" / "stderr.log")),
         ]
     else:
         worker = data.get("workers", {}).get(target)
@@ -2259,6 +2565,8 @@ def headful_reconciler_command(args: argparse.Namespace, run_id: str) -> list[st
         cmd.append("--danger")
     if args.search:
         cmd.append("--search")
+    if getattr(args, "no_hygiene", False):
+        cmd.append("--no-hygiene")
     return cmd
 
 
@@ -2290,6 +2598,8 @@ def command_headful(args: argparse.Namespace) -> int:
         cmd.append("--allow-dirty")
     if args.no_reconcile:
         cmd.append("--no-reconcile")
+    if args.no_hygiene:
+        cmd.append("--no-hygiene")
     if args.safe:
         cmd.append("--safe")
     if args.no_search:
@@ -2350,6 +2660,7 @@ def command_headful_controller(args: argparse.Namespace) -> int:
             "jobs": {},
             "workers": {},
             "reconciler": None,
+            "hygiene": None,
             "mode": "headful-tmux",
             "headful": {
                 "session": args.session,
@@ -2428,6 +2739,7 @@ def command_headful_controller(args: argparse.Namespace) -> int:
                 "completed",
                 "canceled",
                 "reconciler_failed",
+                "hygiene_failed",
                 "direct_apply_failed",
                 "no_successful_workers",
                 "workers_completed",
@@ -2498,6 +2810,7 @@ async def run_headful_live(args: argparse.Namespace) -> int:
             "jobs": {},
             "workers": {},
             "reconciler": None,
+            "hygiene": None,
             "mode": "headful-live",
             "headful": {
                 "session": session,
@@ -2604,6 +2917,12 @@ async def run_headful_live(args: argparse.Namespace) -> int:
             print_live(
                 f"reconciler {reconciler.get('status')} "
                 f"in {format_duration(reconciler.get('duration_seconds'))}"
+            )
+        hygiene = data.get("hygiene") or {}
+        if hygiene:
+            print_live(
+                f"hygiene {hygiene.get('status')} "
+                f"in {format_duration(hygiene.get('duration_seconds'))}"
             )
         print_live(
             "Headful live run finished: "
@@ -3018,9 +3337,11 @@ def headful_submit_prompt(
     closed_phases = {
         "reconciler_queued",
         "reconciling",
+        "hygiene_running",
         "completed",
         "canceled",
         "reconciler_failed",
+        "hygiene_failed",
         "direct_apply_failed",
         "no_successful_workers",
         "workers_completed",
@@ -3119,7 +3440,7 @@ def headful_monitor_loop(
             continue
 
         phase = data.get("phase")
-        if phase in {"completed", "canceled", "reconciler_failed", "direct_apply_failed", "no_successful_workers", "workers_completed"}:
+        if phase in {"completed", "canceled", "reconciler_failed", "hygiene_failed", "direct_apply_failed", "no_successful_workers", "workers_completed"}:
             stop_input.set()
             return
 
@@ -3223,6 +3544,9 @@ def headful_cancel_run(root: pathlib.Path, run_id: str, reason: str) -> None:
     reconciler = data.get("reconciler") or {}
     if reconciler.get("pane_id"):
         panes.append(reconciler["pane_id"])
+    hygiene = data.get("hygiene") or {}
+    if hygiene.get("pane_id"):
+        panes.append(hygiene["pane_id"])
     for pane in panes:
         if pane:
             headful_tmux(["kill-pane", "-t", str(pane)], check=False)
@@ -3397,6 +3721,112 @@ def command_headful_worker(args: argparse.Namespace) -> int:
     return exit_code
 
 
+def run_headful_hygiene_inline(args: argparse.Namespace, root: pathlib.Path, run_dir: pathlib.Path, run_json: pathlib.Path) -> int:
+    data = json.loads(run_json.read_text())
+    hygiene_dir = run_dir / "hygiene"
+    hygiene_dir.mkdir(parents=True, exist_ok=True)
+
+    prompt = build_hygiene_prompt(root, run_dir, data)
+    prompt_path = hygiene_dir / "prompt.md"
+    last_message_path = hygiene_dir / "last_message.md"
+    stderr_path = hygiene_dir / "stderr.log"
+    prompt_path.write_text(prompt)
+    stderr_path.write_text("")
+
+    cmd = ["codex", "--no-alt-screen"]
+    if args.search:
+        cmd.append("--search")
+    cmd.extend(["--cd", str(root)])
+    add_model_args(cmd, args.model, args.reasoning_effort)
+    if args.danger:
+        cmd.append("--dangerously-bypass-approvals-and-sandbox")
+    else:
+        cmd.extend(["--ask-for-approval", "never", "--sandbox", "workspace-write"])
+    cmd.append(prompt)
+
+    pane = os.environ.get("TMUX_PANE", "")
+    start = time.monotonic()
+
+    def mark_running(data: dict[str, Any]) -> None:
+        data["phase"] = "hygiene_running"
+        data["hygiene"] = {
+            "status": "running",
+            "pid": None,
+            "started_at": now_iso(),
+            "completed_at": None,
+            "duration_seconds": None,
+            "exit_code": None,
+            "prompt_path": str(prompt_path),
+            "stderr_path": str(stderr_path),
+            "last_message_path": str(last_message_path),
+            "command": cmd,
+            "pane_id": pane,
+        }
+
+    lock_run_state(run_json, mark_running)
+    headful_event(run_dir, "headful_hygiene_start", command=cmd, pane_id=pane)
+
+    process = subprocess.Popen(cmd, cwd=str(root))
+    watcher = threading.Thread(target=headful_watch_codex_pane, args=(pane, process), daemon=True)
+    watcher.start()
+    exit_code = process.wait()
+    duration = time.monotonic() - start
+    screen = headful_capture_pane(pane) if pane else ""
+    (hygiene_dir / "screen.txt").write_text(screen)
+    last_message_path.write_text(
+        "# Headful Codex hygiene screen capture\n\n"
+        "The hygiene agent ran in the interactive Codex TUI. The final visible pane "
+        "capture is below.\n\n"
+        "```text\n"
+        f"{screen}\n"
+        "```\n"
+    )
+
+    final_status = run_cmd(["git", "status", "--short"], cwd=root, check=False).stdout
+    final_stat = run_cmd(["git", "diff", "--stat"], cwd=root, check=False).stdout
+    (hygiene_dir / "final-git-status.txt").write_text(final_status)
+    (hygiene_dir / "final-diff-stat.txt").write_text(final_stat)
+    final_snapshot = final_snapshot_metadata(root, "hygiene") if exit_code == 0 else None
+
+    def mark_done(data: dict[str, Any]) -> None:
+        data["phase"] = "completed" if exit_code == 0 else "hygiene_failed"
+        data["completed_at"] = now_iso()
+        if final_snapshot:
+            data["final_snapshot"] = final_snapshot
+        data["hygiene"].update(
+            {
+                "status": "succeeded" if exit_code == 0 else "failed",
+                "exit_code": exit_code,
+                "completed_at": now_iso(),
+                "duration_seconds": round(duration, 2),
+                "pid_alive": False,
+                "screen_path": str(hygiene_dir / "screen.txt"),
+                "final_git_status_path": str(hygiene_dir / "final-git-status.txt"),
+                "final_diff_stat_path": str(hygiene_dir / "final-diff-stat.txt"),
+            }
+        )
+
+    lock_run_state(run_json, mark_done)
+    if final_snapshot:
+        event_fields = {
+            "vcs": final_snapshot.get("vcs"),
+            "snapshot_source": final_snapshot.get("snapshot_source"),
+        }
+        if final_snapshot.get("vcs") == "jj":
+            event_fields["jj_change_id"] = final_snapshot.get("jj_change_id")
+            event_fields["jj_commit_id"] = final_snapshot.get("jj_commit_id")
+        else:
+            event_fields["git_head"] = final_snapshot.get("git_head")
+        headful_event(run_dir, "final_snapshot_recorded", **event_fields)
+    headful_event(
+        run_dir,
+        "headful_hygiene_succeeded" if exit_code == 0 else "headful_hygiene_failed",
+        exit_code=exit_code,
+        duration_seconds=round(duration, 2),
+    )
+    return exit_code
+
+
 def command_headful_reconciler(args: argparse.Namespace) -> int:
     root = git_root()
     _state, run_dir, run_json = headful_run_paths(root, args.run)
@@ -3500,11 +3930,22 @@ def command_headful_reconciler(args: argparse.Namespace) -> int:
         exit_code=exit_code,
         duration_seconds=round(duration, 2),
     )
-    headful_close_pane(
+    final_exit_code = exit_code
+    close_message = (
         f"reconciler {'done' if exit_code == 0 else 'failed'} "
         f"in {format_duration(duration)}"
     )
-    return exit_code
+    if exit_code == 0 and not args.no_hygiene:
+        print("Reconciler done; starting hygiene...")
+        hygiene_exit = run_headful_hygiene_inline(args, root, run_dir, run_json)
+        final_exit_code = hygiene_exit
+        hygiene_data = json.loads(run_json.read_text()).get("hygiene") or {}
+        close_message = (
+            f"hygiene {'done' if hygiene_exit == 0 else 'failed'} "
+            f"in {format_duration(hygiene_data.get('duration_seconds'))}"
+        )
+    headful_close_pane(close_message)
+    return final_exit_code
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -3528,6 +3969,7 @@ def build_parser() -> argparse.ArgumentParser:
     quick.add_argument("--base", help="git ref for worker worktrees; default: HEAD")
     quick.add_argument("--allow-dirty", action="store_true", help="allow reconciling onto a dirty checkout")
     quick.add_argument("--no-reconcile", action="store_true", help="run workers only")
+    quick.add_argument("--no-hygiene", action="store_true", help="skip post-reconcile hygiene")
     quick.add_argument("--model", default=DEFAULT_MODEL, help=f"Codex model; default: {DEFAULT_MODEL}")
     quick.add_argument(
         "--reasoning-effort",
@@ -3542,7 +3984,7 @@ def build_parser() -> argparse.ArgumentParser:
     quick.add_argument(
         "--no-search",
         action="store_true",
-        help="do not enable Codex web search for workers and reconciler",
+        help="do not enable Codex web search for workers, reconciler, and hygiene",
     )
     quick.set_defaults(
         func=lambda args: command_capture(
@@ -3555,6 +3997,7 @@ def build_parser() -> argparse.ArgumentParser:
                 base=args.base,
                 allow_dirty=args.allow_dirty,
                 no_reconcile=args.no_reconcile,
+                no_hygiene=args.no_hygiene,
                 model=args.model,
                 reasoning_effort=args.reasoning_effort,
                 danger=not args.safe,
@@ -3581,6 +4024,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     capture.add_argument("--allow-dirty", action="store_true", help="allow reconciling onto a dirty checkout")
     capture.add_argument("--no-reconcile", action="store_true", help="run workers only")
+    capture.add_argument("--no-hygiene", action="store_true", help="skip post-reconcile hygiene")
     capture.add_argument("--model", default=DEFAULT_MODEL, help=f"Codex model; default: {DEFAULT_MODEL}")
     capture.add_argument(
         "--reasoning-effort",
@@ -3588,7 +4032,7 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"Codex reasoning effort; default: {DEFAULT_REASONING_EFFORT}",
     )
     capture.add_argument("--danger", action="store_true", help="pass Codex dangerously-bypass flag")
-    capture.add_argument("--search", action="store_true", help="enable Codex web search for workers and reconciler")
+    capture.add_argument("--search", action="store_true", help="enable Codex web search for workers, reconciler, and hygiene")
     capture.set_defaults(func=command_capture)
 
     run = sub.add_parser("run", help="run queued prompts in parallel and reconcile")
@@ -3599,6 +4043,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     run.add_argument("--allow-dirty", action="store_true", help="allow reconciling onto a dirty checkout")
     run.add_argument("--no-reconcile", action="store_true", help="run workers only")
+    run.add_argument("--no-hygiene", action="store_true", help="skip post-reconcile hygiene")
     run.add_argument("--model", default=DEFAULT_MODEL, help=f"Codex model; default: {DEFAULT_MODEL}")
     run.add_argument(
         "--reasoning-effort",
@@ -3606,7 +4051,7 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"Codex reasoning effort; default: {DEFAULT_REASONING_EFFORT}",
     )
     run.add_argument("--danger", action="store_true", help="pass Codex dangerously-bypass flag")
-    run.add_argument("--search", action="store_true", help="enable Codex web search for workers and reconciler")
+    run.add_argument("--search", action="store_true", help="enable Codex web search for workers, reconciler, and hygiene")
     run.set_defaults(func=lambda args: asyncio.run(run_batch(args)))
 
     headful = sub.add_parser(
@@ -3624,6 +4069,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="fail if the checkout is dirty; default allows dirty checkouts",
     )
     headful.add_argument("--no-reconcile", action="store_true", help="run workers only")
+    headful.add_argument("--no-hygiene", action="store_true", help="skip post-reconcile hygiene")
     headful.add_argument("--model", default=DEFAULT_MODEL, help=f"Codex model; default: {DEFAULT_MODEL}")
     headful.add_argument(
         "--reasoning-effort",
@@ -3638,7 +4084,7 @@ def build_parser() -> argparse.ArgumentParser:
     headful.add_argument(
         "--no-search",
         action="store_true",
-        help="do not enable Codex web search for workers and reconciler",
+        help="do not enable Codex web search for workers, reconciler, and hygiene",
     )
     headful.add_argument(
         "--flush-queue",
@@ -3659,6 +4105,7 @@ def build_parser() -> argparse.ArgumentParser:
     headful_controller.add_argument("--base")
     headful_controller.add_argument("--allow-dirty", action="store_true")
     headful_controller.add_argument("--no-reconcile", action="store_true")
+    headful_controller.add_argument("--no-hygiene", action="store_true")
     headful_controller.add_argument("--model", default=DEFAULT_MODEL)
     headful_controller.add_argument("--reasoning-effort", default=DEFAULT_REASONING_EFFORT)
     headful_controller.add_argument("--safe", action="store_true")
@@ -3683,6 +4130,7 @@ def build_parser() -> argparse.ArgumentParser:
     headful_reconciler.add_argument("--reasoning-effort", default=DEFAULT_REASONING_EFFORT)
     headful_reconciler.add_argument("--danger", action="store_true")
     headful_reconciler.add_argument("--search", action="store_true")
+    headful_reconciler.add_argument("--no-hygiene", action="store_true")
     headful_reconciler.set_defaults(func=command_headful_reconciler)
 
     headful_live = sub.add_parser("headful-live", help=argparse.SUPPRESS)
@@ -3690,6 +4138,7 @@ def build_parser() -> argparse.ArgumentParser:
     headful_live.add_argument("--base")
     headful_live.add_argument("--allow-dirty", action="store_true")
     headful_live.add_argument("--no-reconcile", action="store_true")
+    headful_live.add_argument("--no-hygiene", action="store_true")
     headful_live.add_argument("--model", default=DEFAULT_MODEL)
     headful_live.add_argument("--reasoning-effort", default=DEFAULT_REASONING_EFFORT)
     headful_live.add_argument("--danger", action="store_true")
@@ -3708,6 +4157,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     live.add_argument("--allow-dirty", action="store_true", help="allow reconciling onto a dirty checkout")
     live.add_argument("--no-reconcile", action="store_true", help="run workers only")
+    live.add_argument("--no-hygiene", action="store_true", help="skip post-reconcile hygiene")
     live.add_argument("--model", default=DEFAULT_MODEL, help=f"Codex model; default: {DEFAULT_MODEL}")
     live.add_argument(
         "--reasoning-effort",
@@ -3715,7 +4165,7 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"Codex reasoning effort; default: {DEFAULT_REASONING_EFFORT}",
     )
     live.add_argument("--danger", action="store_true", help="pass Codex dangerously-bypass flag")
-    live.add_argument("--search", action="store_true", help="enable Codex web search for workers and reconciler")
+    live.add_argument("--search", action="store_true", help="enable Codex web search for workers, reconciler, and hygiene")
     live.add_argument("--flush-queue", action="store_true", help="delete stale file-queue prompts before live input starts")
     live.add_argument(
         "--auto-reconcile-when-idle",
@@ -3739,12 +4189,25 @@ def build_parser() -> argparse.ArgumentParser:
     )
     reconcile.add_argument("--danger", action="store_true", help="pass Codex dangerously-bypass flag")
     reconcile.add_argument("--search", action="store_true", help="enable Codex web search for reconciler")
+    reconcile.add_argument("--no-hygiene", action="store_true", help="skip post-reconcile hygiene")
     reconcile.add_argument(
         "--force",
         action="store_true",
         help="reconcile even if workers are still running or already reconciled",
     )
     reconcile.set_defaults(func=lambda args: asyncio.run(run_reconcile_existing(args)))
+
+    hygiene = sub.add_parser("hygiene", help="run the post-reconcile hygiene phase for a run")
+    hygiene.add_argument("--run", help="run id; defaults to latest")
+    hygiene.add_argument("--model", help=f"Codex model; default: run model or {DEFAULT_MODEL}")
+    hygiene.add_argument(
+        "--reasoning-effort",
+        help=f"Codex reasoning effort; default: run value or {DEFAULT_REASONING_EFFORT}",
+    )
+    hygiene.add_argument("--danger", action="store_true", help="pass Codex dangerously-bypass flag")
+    hygiene.add_argument("--search", action="store_true", help="enable Codex web search for hygiene")
+    hygiene.add_argument("--force", action="store_true", help="run even without a successful reconciler")
+    hygiene.set_defaults(func=lambda args: asyncio.run(run_hygiene_existing(args)))
 
     list_cmd = sub.add_parser("list", help="list queued prompts")
     list_cmd.set_defaults(func=command_list)
@@ -3757,8 +4220,8 @@ def build_parser() -> argparse.ArgumentParser:
     runs.add_argument("-n", "--limit", type=int, default=10)
     runs.set_defaults(func=command_runs)
 
-    logs = sub.add_parser("logs", help="print worker/reconciler/event logs")
-    logs.add_argument("target", help="worker id/prefix, reconciler, or events")
+    logs = sub.add_parser("logs", help="print worker/reconciler/hygiene/event logs")
+    logs.add_argument("target", help="worker id/prefix, reconciler, hygiene, or events")
     logs.add_argument("--run", help="run id; defaults to latest")
     logs.add_argument("--tail", type=int, help="only print last N lines per file")
     logs.set_defaults(func=command_logs)

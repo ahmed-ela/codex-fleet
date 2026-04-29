@@ -80,6 +80,7 @@ struct App {
     run_dir: Option<PathBuf>,
     phase: Option<String>,
     reconciler: Option<ReconcilerStats>,
+    hygiene: Option<ReconcilerStats>,
     batch_started_at: Option<Instant>,
     batch_finished_seconds: Option<f64>,
     last_stats_refresh: Instant,
@@ -110,6 +111,7 @@ impl App {
             run_dir: None,
             phase: None,
             reconciler: None,
+            hygiene: None,
             batch_started_at: None,
             batch_finished_seconds: None,
             last_stats_refresh: Instant::now(),
@@ -301,6 +303,7 @@ impl App {
         self.run_dir = None;
         self.phase = None;
         self.reconciler = None;
+        self.hygiene = None;
         self.done = false;
         self.exit_code = 0;
         self.batch_started_at = None;
@@ -457,9 +460,11 @@ impl App {
             Some(
                 "reconciler_queued"
                     | "reconciling"
+                    | "hygiene_running"
                     | "completed"
                     | "canceled"
                     | "reconciler_failed"
+                    | "hygiene_failed"
                     | "direct_apply_failed"
                     | "no_successful_workers"
                     | "workers_completed"
@@ -808,6 +813,36 @@ impl App {
                 });
             }
         }
+
+        if let Some(hygiene_value) = value.get("hygiene") {
+            if let Some(hygiene) = hygiene_value.as_object() {
+                let status = hygiene
+                    .get("status")
+                    .and_then(Value::as_str)
+                    .unwrap_or("unknown")
+                    .to_string();
+                let duration_seconds = hygiene.get("duration_seconds").and_then(Value::as_f64);
+                let started_at = if status == "running" {
+                    self.hygiene
+                        .as_ref()
+                        .and_then(|stats| stats.started_at)
+                        .or_else(|| Some(Instant::now()))
+                } else {
+                    self.hygiene.as_ref().and_then(|stats| stats.started_at)
+                };
+                let preview_lines = if self.workspace_mode {
+                    read_workspace_pane_preview(hygiene_value)
+                } else {
+                    read_hygiene_preview(&run_dir, hygiene_value, 80)
+                };
+                self.hygiene = Some(ReconcilerStats {
+                    status,
+                    duration_seconds,
+                    started_at,
+                    preview_lines,
+                });
+            }
+        }
     }
 }
 
@@ -1080,6 +1115,13 @@ fn workspace_status_line(app: &App) -> String {
             format_duration(reconciler_display_duration(reconciler))
         ));
     }
+    if let Some(hygiene) = app.hygiene.as_ref() {
+        parts.push(format!(
+            "hygiene {} {}",
+            hygiene.status,
+            format_duration(reconciler_display_duration(hygiene))
+        ));
+    }
     parts.push("Ctrl-C clear/cancel".to_string());
     parts.join("  ")
 }
@@ -1133,6 +1175,14 @@ fn workspace_job_lines(app: &App, max_lines: usize) -> Vec<String> {
             reconciler.status,
             format_duration(reconciler_display_duration(reconciler)),
             workspace_preview_pane_label(&reconciler.preview_lines).unwrap_or_default()
+        ));
+    }
+    if let Some(hygiene) = app.hygiene.as_ref() {
+        agent_rows.push(format!(
+            "H {} {} {}",
+            hygiene.status,
+            format_duration(reconciler_display_duration(hygiene)),
+            workspace_preview_pane_label(&hygiene.preview_lines).unwrap_or_default()
         ));
     }
 
@@ -1419,6 +1469,19 @@ fn build_preview_panes(app: &App) -> Vec<PreviewPane> {
         });
     }
 
+    if let Some(hygiene) = app.hygiene.as_ref() {
+        let duration = reconciler_display_duration(hygiene);
+        let mut lines = hygiene.preview_lines.clone();
+        if lines.is_empty() {
+            lines.push("waiting for hygiene output...".to_string());
+        }
+        panes.push(PreviewPane {
+            title: format!("Hygiene [{} {}]", hygiene.status, format_duration(duration)),
+            status: hygiene.status.clone(),
+            lines,
+        });
+    }
+
     panes
 }
 
@@ -1589,6 +1652,20 @@ fn read_reconciler_preview(run_dir: &Path, reconciler: &Value, max_lines: usize)
     read_codex_preview(
         &run_dir.join("reconciler").join("stdout.jsonl"),
         &run_dir.join("reconciler").join("stderr.log"),
+        max_lines,
+    )
+}
+
+fn read_hygiene_preview(run_dir: &Path, hygiene: &Value, max_lines: usize) -> Vec<String> {
+    if let Some(lines) = read_tmux_pane_preview(hygiene, max_lines) {
+        return lines;
+    }
+    if let Some(lines) = read_screen_file_preview(hygiene, max_lines) {
+        return lines;
+    }
+    read_codex_preview(
+        &run_dir.join("hygiene").join("stdout.jsonl"),
+        &run_dir.join("hygiene").join("stderr.log"),
         max_lines,
     )
 }

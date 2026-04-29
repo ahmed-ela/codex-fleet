@@ -2610,7 +2610,7 @@ def command_headful_controller(args: argparse.Namespace) -> int:
             print("Warning: --allow-dirty is enabled; reconciler will edit the current checkout.")
         print("Enter starts a worker immediately in the current batch.")
         print("Tab queues a message for the next batch after this batch is fully applied/reconciled.")
-        print("Ctrl-A/E move, Ctrl-W/U edit, Ctrl-D finishes input, Ctrl-C clears or cancels.")
+        print("Ctrl-A/E move, Ctrl-W/U edit, Ctrl-D exits after idle, Ctrl-C clears or cancels.")
         print()
 
         stop_input = threading.Event()
@@ -2643,7 +2643,7 @@ def command_headful_controller(args: argparse.Namespace) -> int:
         if canceled:
             return 130
 
-        print("\ninput closed; waiting for workers/reconciler...")
+        print("\nrun drained; checking queued messages...")
         terminal_phase = None
         while True:
             data = headful_load_run(root, run_id)
@@ -2690,6 +2690,7 @@ def headful_input_loop(
     history_index: int | None = None
     history_draft = ""
     last_timer_redraw = 0.0
+    finish_requested = False
 
     def display_input(value: str) -> str:
         return value.replace("\t", "\\t").replace("\n", "\\n")
@@ -2831,6 +2832,18 @@ def headful_input_loop(
             return True
         return bool(data.get("workers"))
 
+    def reopen_input_after_typing() -> None:
+        nonlocal finish_requested
+        if not finish_requested:
+            return
+        finish_requested = False
+        _state, _run_dir, run_json = headful_run_paths(root, run_id)
+
+        def update(data: dict[str, Any]) -> None:
+            data.setdefault("headful", {})["input_finished"] = False
+
+        lock_run_state(run_json, update)
+
     def record_deferred_count() -> None:
         _state, _run_dir, run_json = headful_run_paths(root, run_id)
 
@@ -2868,6 +2881,8 @@ def headful_input_loop(
             if value == "\x1b":
                 suffix = read_escape_suffix()
                 if suffix == b"[200~":
+                    reopen_input_after_typing()
+                    last_submit["monotonic"] = time.monotonic()
                     insert_text(read_bracketed_paste())
                     redraw()
                     continue
@@ -2935,6 +2950,14 @@ def headful_input_loop(
                 redraw()
                 continue
             if value == "\x04":
+                if run_has_workers() or deferred_messages:
+                    finish_requested = True
+                    headful_mark_input_finished(root, run_id)
+                    sys.stdout.write("\r\033[2K")
+                    sys.stdout.flush()
+                    print("idle exit requested; input stays open until the run drains")
+                    redraw()
+                    continue
                 headful_mark_input_finished(root, run_id)
                 break
             if value == "\t":
@@ -2958,16 +2981,23 @@ def headful_input_loop(
                 sys.stdout.flush()
                 clear_input()
                 if prompt:
+                    reopen_input_after_typing()
                     remember_prompt(prompt)
-                    job_id = headful_submit_prompt(
-                        root,
-                        run_id,
-                        args,
-                        controller_pane,
-                        prompt,
-                    )
-                    last_submit["monotonic"] = time.monotonic()
-                    print(f"queued {job_id}: {prompt[:96]}")
+                    try:
+                        job_id = headful_submit_prompt(
+                            root,
+                            run_id,
+                            args,
+                            controller_pane,
+                            prompt,
+                        )
+                    except FleetError:
+                        deferred_messages.append(prompt)
+                        record_deferred_count()
+                        print(f"message queued after current batch #{len(deferred_messages)}: {prompt[:96]}")
+                    else:
+                        last_submit["monotonic"] = time.monotonic()
+                        print(f"queued {job_id}: {prompt[:96]}")
                 redraw()
                 continue
             if value in {"\x7f", "\b"}:
@@ -2979,6 +3009,8 @@ def headful_input_loop(
                 redraw()
                 continue
             if value.isprintable():
+                reopen_input_after_typing()
+                last_submit["monotonic"] = time.monotonic()
                 insert_text(value)
                 redraw()
     finally:
@@ -3009,6 +3041,20 @@ def headful_submit_prompt(
     body: str,
 ) -> str:
     state, run_dir, run_json = headful_run_paths(root, run_id)
+    closed_phases = {
+        "reconciler_queued",
+        "reconciling",
+        "completed",
+        "canceled",
+        "reconciler_failed",
+        "direct_apply_failed",
+        "no_successful_workers",
+        "workers_completed",
+    }
+    current = json.loads(run_json.read_text())
+    if current.get("reconciler") or current.get("phase") in closed_phases:
+        raise FleetError("This headful run is closed to new prompts.")
+
     inferred_title = first_heading_or_line(body, "job")
     job_id = f"{compact_time()}-{random.randrange(100000, 999999)}-{slugify(inferred_title)}"
     claimed_jobs_dir = run_dir / "jobs"
@@ -3034,8 +3080,8 @@ def headful_submit_prompt(
     worker = worker_base_state(job, worker_dir, worktree)
 
     def update(data: dict[str, Any]) -> None:
-        if data.get("reconciler"):
-            raise FleetError("Reconciler already started; this headful run is closed to new prompts.")
+        if data.get("reconciler") or data.get("phase") in closed_phases:
+            raise FleetError("This headful run is closed to new prompts.")
         data["jobs"][job_id] = {
             "id": job_id,
             "title": inferred_title,
@@ -3045,8 +3091,16 @@ def headful_submit_prompt(
         }
         data["workers"][job_id] = worker
         data["phase"] = "workers_running"
+        data.setdefault("headful", {})["input_finished"] = False
 
-    lock_run_state(run_json, update)
+    try:
+        lock_run_state(run_json, update)
+    except FleetError:
+        with contextlib.suppress(FileNotFoundError):
+            path.unlink()
+        with contextlib.suppress(FileNotFoundError):
+            archive_path.unlink()
+        raise
     headful_event(run_dir, "headful_job_received", job_id=job_id, title=inferred_title)
     pane = headful_spawn_pane(root, controller_pane, headful_worker_command(args, run_id, job_id))
 
@@ -3161,7 +3215,6 @@ def headful_monitor_loop(
         lock_run_state(run_json, record_pane)
         headful_event(run_dir, "headful_reconciler_queued", pane_id=pane)
         reconcile_started = True
-        stop_input.set()
 
 
 def headful_cancel_run(root: pathlib.Path, run_id: str, reason: str) -> None:

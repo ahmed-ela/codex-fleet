@@ -4,7 +4,7 @@ use std::{
     env, fs,
     io::{self, BufRead, BufReader, Write},
     path::{Path, PathBuf},
-    process::{Child, ChildStdin, Command, Stdio},
+    process::{ChildStdin, Command, Stdio},
     sync::mpsc::{self, Receiver, Sender},
     thread,
     time::{Duration, Instant},
@@ -80,8 +80,6 @@ struct App {
     receiver: Receiver<BackendEvent>,
     sender: Sender<BackendEvent>,
     backend_stdin: Option<ChildStdin>,
-    backend_child: Option<Child>,
-    finishing: bool,
     canceling: bool,
     done: bool,
     should_quit: bool,
@@ -109,8 +107,6 @@ impl App {
             receiver,
             sender: sender.clone(),
             backend_stdin: None,
-            backend_child: None,
-            finishing: false,
             canceling: false,
             done: false,
             should_quit: false,
@@ -176,7 +172,18 @@ impl App {
             });
         }
 
-        self.backend_child = Some(child);
+        let sender = sender.clone();
+        thread::spawn(move || {
+            let code = match child.wait() {
+                Ok(status) => status.code().unwrap_or(1),
+                Err(error) => {
+                    let _ =
+                        sender.send(BackendEvent::Line(format!("backend wait failed: {error}")));
+                    1
+                }
+            };
+            let _ = sender.send(BackendEvent::Done(code));
+        });
         self.status =
             "type a prompt; Enter starts now, Tab queues for after this batch".to_string();
         self.add_log(format!("backend: {backend}"));
@@ -222,13 +229,13 @@ impl App {
             match event {
                 BackendEvent::Line(line) => self.add_log(line),
                 BackendEvent::Done(code) => {
+                    self.backend_stdin = None;
                     if !self.canceling && code == 0 && !self.message_queue.is_empty() {
                         let queued = self.message_queue.drain(..).collect::<Vec<_>>();
                         self.jobs.clear();
                         self.run_dir = None;
                         self.phase = None;
                         self.reconciler = None;
-                        self.finishing = false;
                         self.done = false;
                         self.exit_code = 0;
                         self.status = format!(
@@ -246,16 +253,15 @@ impl App {
                         return;
                     }
                     self.done = true;
-                    self.finishing = false;
                     self.exit_code = if self.canceling { 0 } else { code };
                     self.status = if self.canceling {
                         "canceled and cleaned; exiting".to_string()
                     } else if code == 0 {
-                        "finished; press q to exit".to_string()
+                        "finished; exiting".to_string()
                     } else {
                         format!("backend exited with {code}; press q to exit")
                     };
-                    if self.canceling {
+                    if self.canceling || code == 0 {
                         self.should_quit = true;
                     }
                 }
@@ -264,7 +270,7 @@ impl App {
     }
 
     fn submit_prompt(&mut self) {
-        if self.done || self.finishing {
+        if self.done || self.canceling {
             return;
         }
 
@@ -274,11 +280,16 @@ impl App {
             return;
         }
 
+        if !self.backend_accepts_immediate() {
+            self.queue_prompt_for_next_batch(prompt, "current batch is already applying");
+            return;
+        }
+
         self.submit_prompt_text(prompt, "submitted");
     }
 
     fn submit_prompt_text(&mut self, prompt: String, source: &str) {
-        if self.done || self.finishing {
+        if self.done || self.canceling {
             return;
         }
 
@@ -324,7 +335,7 @@ impl App {
     }
 
     fn queue_message(&mut self) {
-        if self.done || self.finishing {
+        if self.done || self.canceling {
             return;
         }
 
@@ -334,6 +345,14 @@ impl App {
             return;
         }
 
+        self.queue_prompt_for_next_batch(prompt, "queued message");
+
+        if self.jobs.is_empty() {
+            self.start_message_queue_now();
+        }
+    }
+
+    fn queue_prompt_for_next_batch(&mut self, prompt: String, source: &str) {
         if self.history.last() != Some(&prompt) {
             self.history.push(prompt.clone());
         }
@@ -347,13 +366,43 @@ impl App {
             self.message_queue.len()
         );
         self.add_log(format!(
-            "queued message {} for after this batch",
+            "{source}: queued message {} for after this batch",
             self.message_queue.len()
         ));
+    }
 
-        if self.jobs.is_empty() {
-            self.finish();
+    fn start_message_queue_now(&mut self) {
+        if self.message_queue.is_empty() || !self.backend_accepts_immediate() {
+            return;
         }
+        let queued = self.message_queue.drain(..).collect::<Vec<_>>();
+        self.status = format!("starting batch from {} queued message(s)", queued.len());
+        self.add_log(format!(
+            "message queue: starting batch from {} queued message(s)",
+            queued.len()
+        ));
+        for prompt in queued {
+            self.submit_prompt_text(prompt, "message queue");
+        }
+    }
+
+    fn backend_accepts_immediate(&self) -> bool {
+        if self.backend_stdin.is_none() {
+            return false;
+        }
+        !matches!(
+            self.phase.as_deref(),
+            Some(
+                "reconciler_queued"
+                    | "reconciling"
+                    | "completed"
+                    | "canceled"
+                    | "reconciler_failed"
+                    | "direct_apply_failed"
+                    | "no_successful_workers"
+                    | "workers_completed"
+            )
+        )
     }
 
     fn input_len(&self) -> usize {
@@ -380,7 +429,7 @@ impl App {
     }
 
     fn insert_input_text(&mut self, text: &str) {
-        if self.done || self.finishing {
+        if self.done || self.canceling {
             return;
         }
         let text = text.replace("\r\n", "\n").replace('\r', "\n");
@@ -506,32 +555,25 @@ impl App {
     }
 
     fn finish(&mut self) {
-        if self.done || self.finishing {
+        if self.done || self.canceling {
             return;
         }
 
-        self.finishing = true;
-        self.status = "finishing input; waiting for workers then reconciler".to_string();
-
-        if let Some(mut stdin) = self.backend_stdin.take() {
-            let _ = writeln!(stdin, "{}", json!({ "command": "finish" }));
-            let _ = stdin.flush();
+        if self.jobs.is_empty() && self.message_queue.is_empty() {
+            if let Some(stdin) = self.backend_stdin.as_mut() {
+                let _ = writeln!(stdin, "{}", json!({ "command": "finish" }));
+                let _ = stdin.flush();
+            }
+            self.status = "no queued work; exiting".to_string();
+            return;
         }
 
-        if let Some(mut child) = self.backend_child.take() {
-            let sender = self.sender.clone();
-            thread::spawn(move || {
-                let code = match child.wait() {
-                    Ok(status) => status.code().unwrap_or(1),
-                    Err(error) => {
-                        let _ = sender
-                            .send(BackendEvent::Line(format!("backend wait failed: {error}")));
-                        1
-                    }
-                };
-                let _ = sender.send(BackendEvent::Done(code));
-            });
+        if self.jobs.is_empty() {
+            self.start_message_queue_now();
+            return;
         }
+
+        self.status = "will exit after the queue drains; input stays open".to_string();
     }
 
     fn abort(&mut self) {
@@ -544,28 +586,17 @@ impl App {
         }
 
         self.canceling = true;
-        self.finishing = true;
         self.status = "canceling workers and cleaning worktrees".to_string();
 
-        if let Some(mut stdin) = self.backend_stdin.take() {
+        let sent_cancel = if let Some(mut stdin) = self.backend_stdin.take() {
             let _ = writeln!(stdin, "{}", json!({ "command": "cancel" }));
             let _ = stdin.flush();
-        }
-
-        if let Some(mut child) = self.backend_child.take() {
-            let sender = self.sender.clone();
-            thread::spawn(move || {
-                let code = match child.wait() {
-                    Ok(status) => status.code().unwrap_or(1),
-                    Err(error) => {
-                        let _ = sender
-                            .send(BackendEvent::Line(format!("backend wait failed: {error}")));
-                        1
-                    }
-                };
-                let _ = sender.send(BackendEvent::Done(code));
-            });
+            true
         } else {
+            false
+        };
+
+        if !sent_cancel {
             self.should_quit = true;
         }
     }
@@ -734,7 +765,7 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>) -> Result<()> {
 
 fn handle_key(app: &mut App, key: KeyEvent) {
     if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
-        if !app.input.is_empty() && !app.done && !app.finishing {
+        if !app.input.is_empty() && !app.done && !app.canceling {
             app.input.clear();
             app.input_cursor = 0;
             app.history_index = None;
@@ -754,7 +785,7 @@ fn handle_key(app: &mut App, key: KeyEvent) {
         return;
     }
 
-    if app.finishing {
+    if app.canceling {
         return;
     }
 
@@ -847,7 +878,7 @@ fn render(frame: &mut Frame, app: &App) {
         .wrap(Wrap { trim: false });
     frame.render_widget(prompt, input_area);
 
-    if !app.done && !app.finishing {
+    if !app.done && !app.canceling {
         frame.set_cursor_position(input_cursor_position(app, input_inner));
     }
 
@@ -872,7 +903,7 @@ fn render(frame: &mut Frame, app: &App) {
                 .fg(Color::Green)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::raw(" finish + reconcile  "),
+        Span::raw(" idle exit  "),
         Span::styled(
             "Ctrl-C",
             Style::default()

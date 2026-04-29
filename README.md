@@ -14,7 +14,7 @@ Default interactive behavior:
 
 - `Enter` starts a worker immediately in the current batch.
 - `Tab` queues a message for the next batch after the current batch finishes and applies/reconciles.
-- `Ctrl-D` closes input and waits for workers/reconciliation.
+- `Ctrl-D` requests idle exit; input stays open while workers/reconciliation continue.
 - `Ctrl-C` clears input, or cancels and cleans when input is empty.
 
 The backend defaults to `gpt-5.5` with `xhigh` reasoning and uses git worktrees for worker isolation.

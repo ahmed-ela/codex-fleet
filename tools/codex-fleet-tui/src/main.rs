@@ -934,18 +934,13 @@ fn render_preview_dashboard(frame: &mut Frame, area: Rect, app: &App) {
 
 fn build_preview_panes(app: &App) -> Vec<PreviewPane> {
     if app.jobs.is_empty() {
-        let mut lines = vec![
-            format!("phase: {}", app.phase.as_deref().unwrap_or("starting")),
-            "workers: 0".to_string(),
-            format!("next batch: {}", app.message_queue.len()),
-        ];
-        if let Some(run_dir) = app.run_dir.as_ref() {
-            lines.push(format!("telemetry: {}", run_dir.display()));
+        let mut lines = Vec::new();
+        let title = if app.message_queue.is_empty() {
+            "Ready".to_string()
         } else {
-            lines.push("telemetry: starting".to_string());
-        }
+            format!("Next Batch ({})", app.message_queue.len())
+        };
         if !app.message_queue.is_empty() {
-            lines.push(String::new());
             lines.extend(
                 app.message_queue
                     .iter()
@@ -954,11 +949,18 @@ fn build_preview_panes(app: &App) -> Vec<PreviewPane> {
                         format!("#{} {}", index + 1, truncate_line(message, 180))
                     }),
             );
-        } else if let Some(last_log) = app.logs.back() {
-            lines.push(format!("last: {}", truncate_line(last_log, 180)));
+        }
+        if let Some(run_dir) = app.run_dir.as_ref() {
+            if !lines.is_empty() {
+                lines.push(String::new());
+            }
+            lines.push(format!("Telemetry: {}", run_dir.display()));
+        }
+        if lines.is_empty() {
+            lines.push("Starting...".to_string());
         }
         return vec![PreviewPane {
-            title: "Run".to_string(),
+            title,
             status: "idle".to_string(),
             lines,
         }];

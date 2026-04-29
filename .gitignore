@@ -1,3 +1,4 @@
 /tools/codex-fleet-tui/target/
 /.codex-fleet/
+__pycache__/
 .DS_Store

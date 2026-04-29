@@ -21,6 +21,13 @@ Bare `codex-fleet` opens the Ratatui UI by default. The older tmux controller is
 
 The backend defaults to `gpt-5.5` with `xhigh` reasoning and uses git worktrees for worker isolation.
 
+## Project Layout
+
+- `bin/codex-fleet`: launcher; defaults to the Ratatui UI.
+- `bin/codex-fleet-backend`: CLI orchestration, worker lifecycle, reconciliation, health, and cleanup commands.
+- `codex_fleet/prepare.py`: deterministic worker worktree prepare/cache logic.
+- `tools/codex-fleet-tui`: Ratatui frontend.
+
 ## Worker Prepare
 
 Before each worker starts Codex, `codex-fleet` runs deterministic prepare steps in that worker worktree. This keeps dependency setup out of the model prompt and logs setup time separately from model time.

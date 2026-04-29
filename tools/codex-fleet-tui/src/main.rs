@@ -63,12 +63,18 @@ struct PreviewPane {
     lines: Vec<String>,
 }
 
+#[derive(Debug, Clone)]
+struct QueuedPrompt {
+    prompt: String,
+    pasted: bool,
+}
+
 struct App {
     input: String,
     input_cursor: usize,
     input_has_paste: bool,
     jobs: Vec<SubmittedJob>,
-    message_queue: VecDeque<String>,
+    message_queue: VecDeque<QueuedPrompt>,
     logs: VecDeque<String>,
     status: String,
     run_dir: Option<PathBuf>,
@@ -264,8 +270,12 @@ impl App {
                             queued.len()
                         ));
                         self.start_backend(self.sender.clone());
-                        for prompt in queued {
-                            self.submit_prompt_text(prompt, "message queue");
+                        for queued_prompt in queued {
+                            self.submit_prompt_text(
+                                queued_prompt.prompt,
+                                "message queue",
+                                queued_prompt.pasted,
+                            );
                         }
                         return;
                     }
@@ -328,18 +338,19 @@ impl App {
             self.status = "empty prompt; type something first".to_string();
             return;
         }
+        let pasted = self.input_has_paste;
 
         self.restart_after_done_if_needed();
 
         if !self.backend_accepts_immediate() {
-            self.queue_prompt_for_next_batch(prompt, "current batch is already applying");
+            self.queue_prompt_for_next_batch(prompt, pasted, "current batch is already applying");
             return;
         }
 
-        self.submit_prompt_text(prompt, "submitted");
+        self.submit_prompt_text(prompt, "submitted", pasted);
     }
 
-    fn submit_prompt_text(&mut self, prompt: String, source: &str) {
+    fn submit_prompt_text(&mut self, prompt: String, source: &str, pasted: bool) {
         if self.canceling || (self.done && self.exit_code != 0) {
             return;
         }
@@ -366,7 +377,7 @@ impl App {
 
         self.start_batch_timer_if_needed();
 
-        let title = prompt_title(&prompt);
+        let title = prompt_title(&prompt, pasted);
         self.jobs.push(SubmittedJob {
             id: None,
             title: title.clone(),
@@ -396,22 +407,24 @@ impl App {
             self.status = "empty prompt; type something first".to_string();
             return;
         }
+        let pasted = self.input_has_paste;
 
         self.restart_after_done_if_needed();
-        self.queue_prompt_for_next_batch(prompt, "queued message");
+        self.queue_prompt_for_next_batch(prompt, pasted, "queued message");
 
         if self.jobs.is_empty() {
             self.start_message_queue_now();
         }
     }
 
-    fn queue_prompt_for_next_batch(&mut self, prompt: String, source: &str) {
+    fn queue_prompt_for_next_batch(&mut self, prompt: String, pasted: bool, source: &str) {
         if self.history.last() != Some(&prompt) {
             self.history.push(prompt.clone());
         }
         self.history_index = None;
         self.history_draft.clear();
-        self.message_queue.push_back(prompt);
+        self.message_queue
+            .push_back(QueuedPrompt { prompt, pasted });
         self.clear_prompt_input();
         self.status = format!("queued for next batch ({})", self.message_queue.len());
         self.add_log(format!(
@@ -430,8 +443,8 @@ impl App {
             "message queue: starting batch from {} queued message(s)",
             queued.len()
         ));
-        for prompt in queued {
-            self.submit_prompt_text(prompt, "message queue");
+        for queued_prompt in queued {
+            self.submit_prompt_text(queued_prompt.prompt, "message queue", queued_prompt.pasted);
         }
     }
 
@@ -1148,17 +1161,16 @@ fn should_compact_input(value: &str) -> bool {
 }
 
 fn compact_input_display(value: &str, pasted: bool) -> Option<String> {
-    if !should_compact_input(value) {
+    if !pasted || !should_compact_input(value) {
         return None;
     }
 
     let chars = value.chars().count();
     let lines = input_line_count(value);
-    let label = if pasted { "pasted" } else { "prompt" };
     let stats = if lines > 1 {
-        format!("[{label}: {lines} lines, {chars} chars]")
+        format!("[pasted: {lines} lines, {chars} chars]")
     } else {
-        format!("[{label}: {chars} chars]")
+        format!("[pasted: {chars} chars]")
     };
     let preview = compact_whitespace(value);
     if preview.is_empty() {
@@ -1168,8 +1180,8 @@ fn compact_input_display(value: &str, pasted: bool) -> Option<String> {
     }
 }
 
-fn prompt_title(prompt: &str) -> String {
-    let title = compact_input_display(prompt, true).unwrap_or_else(|| compact_whitespace(prompt));
+fn prompt_title(prompt: &str, pasted: bool) -> String {
+    let title = compact_input_display(prompt, pasted).unwrap_or_else(|| compact_whitespace(prompt));
     truncate_line(&title, 72)
 }
 
@@ -1234,7 +1246,11 @@ fn build_preview_panes(app: &App) -> Vec<PreviewPane> {
                     .iter()
                     .enumerate()
                     .map(|(index, message)| {
-                        format!("#{} {}", index + 1, truncate_line(message, 180))
+                        format!(
+                            "#{} {}",
+                            index + 1,
+                            prompt_title(&message.prompt, message.pasted)
+                        )
                     }),
             );
         }
@@ -1290,7 +1306,13 @@ fn build_preview_panes(app: &App) -> Vec<PreviewPane> {
                 .message_queue
                 .iter()
                 .enumerate()
-                .map(|(index, message)| format!("#{} {}", index + 1, truncate_line(message, 180)))
+                .map(|(index, message)| {
+                    format!(
+                        "#{} {}",
+                        index + 1,
+                        prompt_title(&message.prompt, message.pasted)
+                    )
+                })
                 .collect(),
         });
     }
@@ -1674,9 +1696,16 @@ mod tests {
 
     #[test]
     fn prompt_title_is_one_line_for_paste() {
-        let title = prompt_title("alpha\nbeta\ngamma");
+        let title = prompt_title("alpha\nbeta\ngamma", true);
         assert!(title.contains("pasted: 3 lines"));
         assert!(!title.contains('\n'));
         assert!(title.chars().count() <= 72);
+    }
+
+    #[test]
+    fn long_typed_input_does_not_compact() {
+        let value = "typed ".repeat(80);
+        assert!(compact_input_display(&value, false).is_none());
+        assert!(!prompt_title(&value, false).contains("[pasted:"));
     }
 }

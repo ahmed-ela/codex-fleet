@@ -2637,21 +2637,23 @@ def headful_input_loop(
     history_draft = ""
     last_timer_redraw = 0.0
     finish_requested = False
+    buffer_has_paste = False
 
     def should_compact_input(value: str) -> bool:
         return "\n" in value or len(value) > 240
 
-    def display_input(value: str) -> str:
-        if should_compact_input(value):
+    def display_input(value: str, compact: bool = False) -> str:
+        if compact:
             return compact_prompt_preview(value, limit=160)
         return value.replace("\t", "\\t").replace("\n", "\\n")
 
     def redraw() -> None:
         prefix = f"fleet {format_duration(time.monotonic() - session_started_at)}> "
-        rendered = display_input(buffer)
+        compact = buffer_has_paste and should_compact_input(buffer)
+        rendered = display_input(buffer, compact=compact)
         if cursor == 0:
             rendered_before_cursor = ""
-        elif should_compact_input(buffer):
+        elif compact:
             rendered_before_cursor = rendered
         else:
             rendered_before_cursor = display_input(buffer[:cursor])
@@ -2670,13 +2672,15 @@ def headful_input_loop(
             sys.stdout.write(f"\033[{tail}D")
         sys.stdout.flush()
 
-    def insert_text(text: str) -> None:
-        nonlocal buffer, cursor, history_index, history_draft
+    def insert_text(text: str, pasted: bool = False) -> None:
+        nonlocal buffer, cursor, history_index, history_draft, buffer_has_paste
         if not text:
             return
         text = text.replace("\r\n", "\n").replace("\r", "\n")
         buffer = buffer[:cursor] + text + buffer[cursor:]
         cursor += len(text)
+        if pasted and should_compact_input(text):
+            buffer_has_paste = True
         history_index = None
         history_draft = ""
 
@@ -2713,7 +2717,7 @@ def headful_input_loop(
         return payload.decode(errors="ignore")
 
     def delete_previous_word() -> None:
-        nonlocal buffer, cursor, history_index, history_draft
+        nonlocal buffer, cursor, history_index, history_draft, buffer_has_paste
         if cursor == 0:
             return
         start = cursor
@@ -2723,6 +2727,8 @@ def headful_input_loop(
             start -= 1
         buffer = buffer[:start] + buffer[cursor:]
         cursor = start
+        if not buffer:
+            buffer_has_paste = False
         history_index = None
         history_draft = ""
 
@@ -2746,9 +2752,10 @@ def headful_input_loop(
         cursor = end
 
     def set_input(value: str) -> None:
-        nonlocal buffer, cursor
+        nonlocal buffer, cursor, buffer_has_paste
         buffer = value
         cursor = len(buffer)
+        buffer_has_paste = False
 
     def browse_history(direction: int) -> None:
         nonlocal history_index, history_draft
@@ -2775,9 +2782,10 @@ def headful_input_loop(
             history.append(prompt)
 
     def clear_input() -> None:
-        nonlocal buffer, cursor, history_index, history_draft
+        nonlocal buffer, cursor, history_index, history_draft, buffer_has_paste
         buffer = ""
         cursor = 0
+        buffer_has_paste = False
         history_index = None
         history_draft = ""
 
@@ -2839,7 +2847,7 @@ def headful_input_loop(
                 if suffix == b"[200~":
                     reopen_input_after_typing()
                     last_submit["monotonic"] = time.monotonic()
-                    insert_text(read_bracketed_paste())
+                    insert_text(read_bracketed_paste(), pasted=True)
                     redraw()
                     continue
                 if suffix in {b"\x7f", b"\b"}:
@@ -2897,6 +2905,8 @@ def headful_input_loop(
             if value == "\x15":
                 buffer = buffer[cursor:]
                 cursor = 0
+                if not buffer:
+                    buffer_has_paste = False
                 history_index = None
                 history_draft = ""
                 redraw()
@@ -2966,6 +2976,8 @@ def headful_input_loop(
                 if cursor > 0:
                     buffer = buffer[:cursor - 1] + buffer[cursor:]
                     cursor -= 1
+                    if not buffer:
+                        buffer_has_paste = False
                     history_index = None
                     history_draft = ""
                 redraw()

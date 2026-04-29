@@ -1008,20 +1008,23 @@ fn render(frame: &mut Frame, app: &App) {
 fn render_workspace_control(frame: &mut Frame, app: &App) {
     let area = frame.area();
     let prompt_height = if area.height >= 5 { 3 } else { 1 };
+    let status_height = if area.height >= 2 { 1 } else { 0 };
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1),
             Constraint::Min(0),
+            Constraint::Length(status_height),
             Constraint::Length(prompt_height),
         ])
         .split(area);
 
-    let status = Paragraph::new(workspace_status_line(app));
-    frame.render_widget(status, chunks[0]);
+    let job_text = workspace_job_lines(app, chunks[0].height as usize).join("\n");
+    frame.render_widget(Paragraph::new(job_text), chunks[0]);
 
-    let job_text = workspace_job_lines(app, chunks[1].height as usize).join("\n");
-    frame.render_widget(Paragraph::new(job_text), chunks[1]);
+    if status_height > 0 {
+        let status = Paragraph::new(workspace_status_line(app));
+        frame.render_widget(status, chunks[1]);
+    }
 
     let input_inner = if prompt_height >= 3 {
         inner(chunks[2])

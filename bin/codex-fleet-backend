@@ -1917,6 +1917,11 @@ def headful_kill_session(session: str | None) -> None:
         headful_tmux(["kill-session", "-t", session], check=False)
 
 
+def headful_session_for_pane(pane: str) -> str:
+    result = headful_tmux(["display-message", "-p", "-t", pane, "#{session_name}"])
+    return result.stdout.strip()
+
+
 def headful_capture_pane(pane: str) -> str:
     result = headful_tmux(["capture-pane", "-p", "-t", pane], check=False)
     return result.stdout if result.returncode == 0 else ""
@@ -2245,8 +2250,13 @@ async def run_headful_live(args: argparse.Namespace) -> int:
             print_live(f"Flushed {removed} stale queued prompt(s).")
 
     run_id = f"{compact_time()}-{random.randrange(1000, 9999)}"
-    session = f"codex-fleet-ui-{run_id}"
-    controller_pane = headful_create_hidden_session(root, session)
+    controller_pane = os.environ.get("TMUX_PANE") or ""
+    hidden_session = not bool(controller_pane)
+    if controller_pane:
+        session = headful_session_for_pane(controller_pane)
+    else:
+        session = f"codex-fleet-ui-{run_id}"
+        controller_pane = headful_create_hidden_session(root, session)
 
     try:
         run_dir = state / RUNS_DIR / run_id
@@ -2277,7 +2287,7 @@ async def run_headful_live(args: argparse.Namespace) -> int:
                 "input_finished": False,
                 "auto_reconcile_delay": args.auto_reconcile_delay,
                 "deferred_message_count": 0,
-                "hidden_session": True,
+                "hidden_session": hidden_session,
             },
         }
         write_json(run_dir / "run.json", run_state)
@@ -2297,6 +2307,8 @@ async def run_headful_live(args: argparse.Namespace) -> int:
         print_live(f"Base: {format_base_summary(base_ref, base_sha, base_meta)}")
         print_live(f"Telemetry: {rel_to_repo(root, run_dir)}")
         print_live(f"Tmux session: {session}")
+        if not hidden_session:
+            print_live("Workspace: visible tmux panes; Codex workers are not embedded in Ratatui.")
         if args.allow_dirty:
             print_live("Warning: --allow-dirty is enabled; reconciler will edit the current checkout.")
 
@@ -2383,7 +2395,8 @@ async def run_headful_live(args: argparse.Namespace) -> int:
         print_live(f"Check health: codex-fleet health --run {run_id}")
         return 0 if phase in {"completed", "workers_completed"} and not failed else 1
     finally:
-        headful_kill_session(session)
+        if hidden_session:
+            headful_kill_session(session)
 
 
 def headful_input_loop(

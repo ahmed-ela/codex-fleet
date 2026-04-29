@@ -17,12 +17,28 @@ backend="${CODEX_FLEET_BACKEND:-$repo_root/bin/codex-fleet-backend}"
 repo_tui="$repo_root/tools/codex-fleet-tui/target/release/codex-fleet-tui"
 tui="${CODEX_FLEET_TUI:-$repo_tui}"
 
-if [ "$#" -eq 0 ]; then
-  if [ -t 0 ] && [ -t 1 ] && [ -x "$tui" ]; then
-    CODEX_FLEET_BACKEND="$backend" exec "$tui"
+ensure_tui() {
+  if [ -x "$tui" ]; then
+    return 0
   fi
-  if [ -t 0 ] && [ -t 1 ] && [ ! -x "$tui" ] && command -v cargo >/dev/null 2>&1; then
+  if command -v cargo >/dev/null 2>&1; then
     (cd "$repo_root/tools/codex-fleet-tui" && cargo build --release >/dev/null)
+  fi
+  [ -x "$tui" ]
+}
+
+if [ "$#" -eq 0 ]; then
+  if [ -t 0 ] && [ -t 1 ] && ensure_tui; then
+    if command -v tmux >/dev/null 2>&1; then
+      if [ -n "${TMUX:-}" ]; then
+        CODEX_FLEET_BACKEND="$backend" CODEX_FLEET_TMUX_WORKSPACE=1 exec "$tui"
+      fi
+      session="codex-fleet-$(date +%Y%m%d-%H%M%S)-$$"
+      exec tmux new-session \
+        -s "$session" \
+        -c "$PWD" \
+        "CODEX_FLEET_BACKEND='$backend' CODEX_FLEET_TMUX_WORKSPACE=1 exec '$tui'"
+    fi
     CODEX_FLEET_BACKEND="$backend" exec "$tui"
   fi
   if [ -t 0 ] && [ -t 1 ] && command -v tmux >/dev/null 2>&1; then

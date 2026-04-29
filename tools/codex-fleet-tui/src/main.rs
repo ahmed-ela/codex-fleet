@@ -85,6 +85,7 @@ struct App {
     done: bool,
     should_quit: bool,
     exit_code: i32,
+    workspace_mode: bool,
 }
 
 impl App {
@@ -113,6 +114,7 @@ impl App {
             done: false,
             should_quit: false,
             exit_code: 0,
+            workspace_mode: env::var("CODEX_FLEET_TMUX_WORKSPACE").is_ok(),
         };
         app.start_backend(sender);
         app
@@ -121,7 +123,7 @@ impl App {
     fn start_backend(&mut self, sender: Sender<BackendEvent>) {
         let backend = env::var("CODEX_FLEET_BACKEND")
             .unwrap_or_else(|_| "/Users/ahmedelamin/.dotfiles/bin/codex-fleet-backend".to_string());
-        let backend_mode = if tmux_available() {
+        let backend_mode = if inside_tmux() || tmux_available() {
             "headful-live"
         } else {
             "live"
@@ -194,8 +196,10 @@ impl App {
         });
         self.status = "Enter starts now; Tab queues later".to_string();
         self.add_log(format!("backend: {backend} ({backend_mode})"));
-        if backend_mode == "headful-live" {
-            self.add_log("previews: real Codex TUI panes captured from tmux".to_string());
+        if self.workspace_mode {
+            self.add_log("workspace: workers open as real visible Codex tmux panes".to_string());
+        } else if backend_mode == "headful-live" {
+            self.add_log("previews: real Codex TUI panes captured from hidden tmux".to_string());
         } else {
             self.add_log("previews: headless Codex JSON logs; tmux was not found".to_string());
         }
@@ -684,7 +688,11 @@ impl App {
                     .and_then(Value::as_array)
                     .map(Vec::len)
                     .unwrap_or(0);
-                let preview_lines = read_worker_preview(&run_dir, job_id, worker, 80);
+                let preview_lines = if self.workspace_mode {
+                    read_workspace_pane_preview(worker)
+                } else {
+                    read_worker_preview(&run_dir, job_id, worker, 80)
+                };
 
                 if let Some(job) = self
                     .jobs
@@ -740,7 +748,11 @@ impl App {
                 } else {
                     self.reconciler.as_ref().and_then(|stats| stats.started_at)
                 };
-                let preview_lines = read_reconciler_preview(&run_dir, reconciler_value, 80);
+                let preview_lines = if self.workspace_mode {
+                    read_workspace_pane_preview(reconciler_value)
+                } else {
+                    read_reconciler_preview(&run_dir, reconciler_value, 80)
+                };
                 self.reconciler = Some(ReconcilerStats {
                     status,
                     duration_seconds,
@@ -810,6 +822,10 @@ fn tmux_available() -> bool {
         Ok(status) => status.success(),
         Err(_) => false,
     }
+}
+
+fn inside_tmux() -> bool {
+    env::var("TMUX").is_ok()
 }
 
 fn handle_key(app: &mut App, key: KeyEvent) {
@@ -1210,6 +1226,28 @@ fn style_for_status(status: &str) -> Style {
 
 fn is_terminal_status(status: &str) -> bool {
     matches!(status, "succeeded" | "failed" | "canceled")
+}
+
+fn read_workspace_pane_preview(value: &Value) -> Vec<String> {
+    let mut lines = Vec::new();
+    if let Some(pane) = value.get("pane_id").and_then(Value::as_str) {
+        if !pane.trim().is_empty() {
+            lines.push(format!("visible tmux pane: {pane}"));
+        }
+    }
+    if let Some(worktree) = value.get("worktree").and_then(Value::as_str) {
+        lines.push(format!("worktree: {}", truncate_line(worktree, 180)));
+    }
+    if let Some(screen_path) = value.get("screen_path").and_then(Value::as_str) {
+        lines.push(format!(
+            "final capture: {}",
+            truncate_line(screen_path, 180)
+        ));
+    }
+    if lines.is_empty() {
+        lines.push("waiting for visible tmux pane...".to_string());
+    }
+    lines
 }
 
 fn read_worker_preview(

@@ -72,6 +72,7 @@ struct App {
     run_dir: Option<PathBuf>,
     phase: Option<String>,
     reconciler: Option<ReconcilerStats>,
+    started_at: Instant,
     last_stats_refresh: Instant,
     history: Vec<String>,
     history_index: Option<usize>,
@@ -100,6 +101,7 @@ impl App {
             run_dir: None,
             phase: None,
             reconciler: None,
+            started_at: Instant::now(),
             last_stats_refresh: Instant::now(),
             history: Vec::new(),
             history_index: None,
@@ -824,6 +826,11 @@ fn render(frame: &mut Frame, app: &App) {
             Style::default()
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw("  "),
+        Span::styled(
+            format_duration(app.started_at.elapsed().as_secs_f64()),
+            Style::default().fg(Color::Yellow),
         ),
         Span::raw("  "),
         Span::raw(app.status.as_str()),

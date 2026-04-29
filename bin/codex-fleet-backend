@@ -2010,6 +2010,7 @@ def command_headful_controller(args: argparse.Namespace) -> int:
     deferred_messages: list[str] = []
     next_batch_messages: list[str] = []
     input_history: list[str] = []
+    session_started_at = time.monotonic()
     batch_number = 0
 
     def create_headful_run() -> tuple[str, pathlib.Path, str, str, dict[str, Any]]:
@@ -2099,6 +2100,7 @@ def command_headful_controller(args: argparse.Namespace) -> int:
             last_submit,
             deferred_messages,
             input_history,
+            session_started_at,
         )
         if canceled:
             return 130
@@ -2140,6 +2142,7 @@ def headful_input_loop(
     last_submit: dict[str, float],
     deferred_messages: list[str],
     history: list[str],
+    session_started_at: float,
 ) -> bool:
     fd = sys.stdin.fileno()
     old_settings = termios.tcgetattr(fd)
@@ -2148,12 +2151,13 @@ def headful_input_loop(
     canceled = False
     history_index: int | None = None
     history_draft = ""
+    last_timer_redraw = 0.0
 
     def display_input(value: str) -> str:
         return value.replace("\t", "\\t").replace("\n", "\\n")
 
     def redraw() -> None:
-        prefix = "fleet> "
+        prefix = f"fleet {format_duration(time.monotonic() - session_started_at)}> "
         rendered = display_input(buffer)
         rendered_before_cursor = display_input(buffer[:cursor])
         columns = max(20, shutil.get_terminal_size((80, 24)).columns)
@@ -2305,6 +2309,10 @@ def headful_input_loop(
         while not stop_input.is_set():
             readable, _w, _x = select.select([sys.stdin], [], [], 0.2)
             if not readable:
+                now = time.monotonic()
+                if now - last_timer_redraw >= 1.0:
+                    last_timer_redraw = now
+                    redraw()
                 continue
             ch = os.read(fd, 1)
             if not ch:

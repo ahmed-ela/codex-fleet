@@ -74,6 +74,7 @@ struct App {
     input_cursor: usize,
     input_has_paste: bool,
     jobs: Vec<SubmittedJob>,
+    agent_queue: VecDeque<QueuedPrompt>,
     message_queue: VecDeque<QueuedPrompt>,
     logs: VecDeque<String>,
     status: String,
@@ -105,6 +106,7 @@ impl App {
             input_cursor: 0,
             input_has_paste: false,
             jobs: Vec::new(),
+            agent_queue: VecDeque::new(),
             message_queue: VecDeque::new(),
             logs: VecDeque::new(),
             status: "starting backend".to_string(),
@@ -257,15 +259,36 @@ impl App {
                 BackendEvent::Done(code) => {
                     self.backend_stdin = None;
                     self.finish_batch_timer();
+                    if !self.canceling && code == 0 && !self.agent_queue.is_empty() {
+                        let queued = self.agent_queue.drain(..).collect::<Vec<_>>();
+                        self.reset_for_next_run();
+                        self.status = format!(
+                            "starting next batch from {} queued Enter job(s)",
+                            queued.len()
+                        );
+                        self.add_log(format!(
+                            "agent queue: starting next batch from {} queued Enter job(s)",
+                            queued.len()
+                        ));
+                        self.start_backend(self.sender.clone());
+                        for queued_prompt in queued {
+                            self.submit_prompt_text(
+                                queued_prompt.prompt,
+                                "agent queue",
+                                queued_prompt.pasted,
+                            );
+                        }
+                        return;
+                    }
                     if !self.canceling && code == 0 && !self.message_queue.is_empty() {
                         let queued = self.message_queue.drain(..).collect::<Vec<_>>();
                         self.reset_for_next_run();
                         self.status = format!(
-                            "starting next batch from {} queued message(s)",
+                            "starting next batch from {} queued Tab message(s)",
                             queued.len()
                         );
                         self.add_log(format!(
-                            "message queue: starting next batch from {} queued message(s)",
+                            "message queue: starting next batch from {} queued Tab message(s)",
                             queued.len()
                         ));
                         self.start_backend(self.sender.clone());
@@ -343,7 +366,7 @@ impl App {
         self.restart_after_done_if_needed();
 
         if !self.backend_accepts_immediate() {
-            self.queue_prompt_for_next_batch(prompt, pasted, "current batch is already applying");
+            self.queue_prompt_for_agent_batch(prompt, pasted, "current batch is already applying");
             return;
         }
 
@@ -411,10 +434,21 @@ impl App {
 
         self.restart_after_done_if_needed();
         self.queue_prompt_for_next_batch(prompt, pasted, "queued message");
+    }
 
-        if self.jobs.is_empty() {
-            self.start_message_queue_now();
+    fn queue_prompt_for_agent_batch(&mut self, prompt: String, pasted: bool, source: &str) {
+        if self.history.last() != Some(&prompt) {
+            self.history.push(prompt.clone());
         }
+        self.history_index = None;
+        self.history_draft.clear();
+        self.agent_queue.push_back(QueuedPrompt { prompt, pasted });
+        self.clear_prompt_input();
+        self.status = format!("queued for Enter batch ({})", self.agent_queue.len());
+        self.add_log(format!(
+            "{source}: queued Enter job {} for the next primary batch",
+            self.agent_queue.len()
+        ));
     }
 
     fn queue_prompt_for_next_batch(&mut self, prompt: String, pasted: bool, source: &str) {
@@ -445,6 +479,21 @@ impl App {
         ));
         for queued_prompt in queued {
             self.submit_prompt_text(queued_prompt.prompt, "message queue", queued_prompt.pasted);
+        }
+    }
+
+    fn start_agent_queue_now(&mut self) {
+        if self.agent_queue.is_empty() || !self.backend_accepts_immediate() {
+            return;
+        }
+        let queued = self.agent_queue.drain(..).collect::<Vec<_>>();
+        self.status = format!("starting {} queued Enter job(s)", queued.len());
+        self.add_log(format!(
+            "agent queue: starting batch from {} queued Enter job(s)",
+            queued.len()
+        ));
+        for queued_prompt in queued {
+            self.submit_prompt_text(queued_prompt.prompt, "agent queue", queued_prompt.pasted);
         }
     }
 
@@ -657,7 +706,7 @@ impl App {
             return;
         }
 
-        if self.jobs.is_empty() && self.message_queue.is_empty() {
+        if self.jobs.is_empty() && self.agent_queue.is_empty() && self.message_queue.is_empty() {
             if let Some(stdin) = self.backend_stdin.as_mut() {
                 let _ = writeln!(stdin, "{}", json!({ "command": "finish" }));
                 let _ = stdin.flush();
@@ -667,7 +716,11 @@ impl App {
         }
 
         if self.jobs.is_empty() {
-            self.start_message_queue_now();
+            if !self.agent_queue.is_empty() {
+                self.start_agent_queue_now();
+            } else {
+                self.start_message_queue_now();
+            }
             return;
         }
 
@@ -1134,7 +1187,7 @@ fn workspace_job_lines(app: &App, max_lines: usize) -> Vec<String> {
         return vec![workspace_compact_queue_summary(app)];
     }
 
-    let agent_rows = app
+    let mut agent_rows = app
         .jobs
         .iter()
         .enumerate()
@@ -1153,6 +1206,13 @@ fn workspace_job_lines(app: &App, max_lines: usize) -> Vec<String> {
                 + &truncate_line(&job.title, 120)
         })
         .collect::<Vec<_>>();
+    agent_rows.extend(app.agent_queue.iter().enumerate().map(|(index, message)| {
+        format!(
+            "q{} waiting  {}",
+            index + 1,
+            prompt_title(&message.prompt, message.pasted)
+        )
+    }));
 
     let next_rows = app
         .message_queue
@@ -1167,7 +1227,6 @@ fn workspace_job_lines(app: &App, max_lines: usize) -> Vec<String> {
         })
         .collect::<Vec<_>>();
 
-    let mut agent_rows = agent_rows;
     if let Some(reconciler) = app.reconciler.as_ref() {
         agent_rows.push(format!(
             "R {} {} {}",
@@ -1247,7 +1306,12 @@ fn workspace_agents_header(app: &App) -> String {
         .iter()
         .filter(|job| !is_terminal_status(&job.status))
         .count();
-    format!("Agents  [Enter] start now  {running} running")
+    let waiting = app.agent_queue.len();
+    if waiting > 0 {
+        format!("Agents  [Enter] start now  {running} running  {waiting} waiting")
+    } else {
+        format!("Agents  [Enter] start now  {running} running")
+    }
 }
 
 fn workspace_next_header(app: &App) -> String {
@@ -1262,7 +1326,8 @@ fn workspace_compact_queue_summary(app: &App) -> String {
         .filter(|job| !is_terminal_status(&job.status))
         .count();
     format!(
-        "Agents [Enter] {running} running  |  Next [Tab] {} waiting",
+        "Agents [Enter] {running} running {} waiting  |  Next [Tab] {} waiting",
+        app.agent_queue.len(),
         app.message_queue.len()
     )
 }
@@ -1373,12 +1438,30 @@ fn render_preview_dashboard(frame: &mut Frame, area: Rect, app: &App) {
 fn build_preview_panes(app: &App) -> Vec<PreviewPane> {
     if app.jobs.is_empty() {
         let mut lines = Vec::new();
-        let title = if app.message_queue.is_empty() {
+        let title = if app.agent_queue.is_empty() && app.message_queue.is_empty() {
             "Ready".to_string()
         } else {
-            format!("Next Batch ({})", app.message_queue.len())
+            format!(
+                "Queues (Enter {}, Tab {})",
+                app.agent_queue.len(),
+                app.message_queue.len()
+            )
         };
+        if !app.agent_queue.is_empty() {
+            lines.push("Enter queue".to_string());
+            lines.extend(app.agent_queue.iter().enumerate().map(|(index, message)| {
+                format!(
+                    "#{} {}",
+                    index + 1,
+                    prompt_title(&message.prompt, message.pasted)
+                )
+            }));
+        }
         if !app.message_queue.is_empty() {
+            if !lines.is_empty() {
+                lines.push(String::new());
+            }
+            lines.push("Tab queue".to_string());
             lines.extend(
                 app.message_queue
                     .iter()
@@ -1436,9 +1519,28 @@ fn build_preview_panes(app: &App) -> Vec<PreviewPane> {
         })
         .collect::<Vec<_>>();
 
+    if !app.agent_queue.is_empty() {
+        panes.push(PreviewPane {
+            title: format!("Enter Queue [{} pending]", app.agent_queue.len()),
+            status: "queued".to_string(),
+            lines: app
+                .agent_queue
+                .iter()
+                .enumerate()
+                .map(|(index, message)| {
+                    format!(
+                        "#{} {}",
+                        index + 1,
+                        prompt_title(&message.prompt, message.pasted)
+                    )
+                })
+                .collect(),
+        });
+    }
+
     if !app.message_queue.is_empty() {
         panes.push(PreviewPane {
-            title: format!("Message Queue [{} pending]", app.message_queue.len()),
+            title: format!("Tab Queue [{} pending]", app.message_queue.len()),
             status: "queued".to_string(),
             lines: app
                 .message_queue
@@ -1847,6 +1949,38 @@ fn truncate_line(value: &str, max_chars: usize) -> String {
 mod tests {
     use super::*;
 
+    fn test_app() -> App {
+        let (sender, receiver) = mpsc::channel();
+        App {
+            input: String::new(),
+            input_cursor: 0,
+            input_has_paste: false,
+            jobs: Vec::new(),
+            agent_queue: VecDeque::new(),
+            message_queue: VecDeque::new(),
+            logs: VecDeque::new(),
+            status: String::new(),
+            run_dir: None,
+            phase: None,
+            reconciler: None,
+            hygiene: None,
+            batch_started_at: None,
+            batch_finished_seconds: None,
+            last_stats_refresh: Instant::now(),
+            history: Vec::new(),
+            history_index: None,
+            history_draft: String::new(),
+            receiver,
+            sender,
+            backend_stdin: None,
+            canceling: false,
+            done: false,
+            should_quit: false,
+            exit_code: 0,
+            workspace_mode: false,
+        }
+    }
+
     #[test]
     fn compact_display_hides_multiline_paste() {
         let display = compact_input_display("line one\nline two\nline three", true).unwrap();
@@ -1899,6 +2033,51 @@ mod tests {
         assert_eq!(
             lines_with_more(rows, 2),
             vec!["one".to_string(), "+2 more".to_string()]
+        );
+    }
+
+    #[test]
+    fn tab_queue_does_not_start_without_enter_or_finish() {
+        let mut app = test_app();
+        app.input = "run later".to_string();
+        app.input_cursor = app.input_len();
+
+        app.queue_message();
+
+        assert!(app.jobs.is_empty());
+        assert!(app.agent_queue.is_empty());
+        assert_eq!(app.message_queue.len(), 1);
+    }
+
+    #[test]
+    fn enter_while_batch_is_closed_uses_agent_queue_not_tab_queue() {
+        let mut app = test_app();
+        app.phase = Some("reconciling".to_string());
+        app.input = "start this as the next primary job".to_string();
+        app.input_cursor = app.input_len();
+
+        app.submit_prompt();
+
+        assert_eq!(app.agent_queue.len(), 1);
+        assert!(app.message_queue.is_empty());
+        assert!(app.status.contains("Enter batch"));
+    }
+
+    #[test]
+    fn workspace_summary_shows_enter_and_tab_queues_separately() {
+        let mut app = test_app();
+        app.agent_queue.push_back(QueuedPrompt {
+            prompt: "primary next".to_string(),
+            pasted: false,
+        });
+        app.message_queue.push_back(QueuedPrompt {
+            prompt: "tab later".to_string(),
+            pasted: false,
+        });
+
+        assert_eq!(
+            workspace_compact_queue_summary(&app),
+            "Agents [Enter] 0 running 1 waiting  |  Next [Tab] 1 waiting"
         );
     }
 }

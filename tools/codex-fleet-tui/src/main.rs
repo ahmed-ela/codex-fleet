@@ -121,20 +121,26 @@ impl App {
     fn start_backend(&mut self, sender: Sender<BackendEvent>) {
         let backend = env::var("CODEX_FLEET_BACKEND")
             .unwrap_or_else(|_| "/Users/ahmedelamin/.dotfiles/bin/codex-fleet-backend".to_string());
+        let backend_mode = if tmux_available() {
+            "headful-live"
+        } else {
+            "live"
+        };
+        let backend_args = vec![
+            backend_mode.to_string(),
+            "--danger".to_string(),
+            "--search".to_string(),
+            "--allow-dirty".to_string(),
+            "--flush-queue".to_string(),
+            "--auto-reconcile-when-idle".to_string(),
+            "--auto-reconcile-delay".to_string(),
+            "1".to_string(),
+            "-j".to_string(),
+            DEFAULT_WORKERS.to_string(),
+        ];
 
         let mut child = match Command::new(&backend)
-            .args([
-                "live",
-                "--danger",
-                "--search",
-                "--allow-dirty",
-                "--flush-queue",
-                "--auto-reconcile-when-idle",
-                "--auto-reconcile-delay",
-                "1",
-                "-j",
-                &DEFAULT_WORKERS.to_string(),
-            ])
+            .args(&backend_args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -187,7 +193,12 @@ impl App {
             let _ = sender.send(BackendEvent::Done(code));
         });
         self.status = "Enter starts now; Tab queues later".to_string();
-        self.add_log(format!("backend: {backend}"));
+        self.add_log(format!("backend: {backend} ({backend_mode})"));
+        if backend_mode == "headful-live" {
+            self.add_log("previews: real Codex TUI panes captured from tmux".to_string());
+        } else {
+            self.add_log("previews: headless Codex JSON logs; tmux was not found".to_string());
+        }
     }
 
     fn add_log(&mut self, line: impl Into<String>) {
@@ -673,11 +684,7 @@ impl App {
                     .and_then(Value::as_array)
                     .map(Vec::len)
                     .unwrap_or(0);
-                let preview_lines = read_codex_preview(
-                    &run_dir.join("workers").join(job_id).join("stdout.jsonl"),
-                    &run_dir.join("workers").join(job_id).join("stderr.log"),
-                    80,
-                );
+                let preview_lines = read_worker_preview(&run_dir, job_id, worker, 80);
 
                 if let Some(job) = self
                     .jobs
@@ -717,32 +724,30 @@ impl App {
             }
         }
 
-        if let Some(reconciler) = value.get("reconciler").and_then(Value::as_object) {
-            let status = reconciler
-                .get("status")
-                .and_then(Value::as_str)
-                .unwrap_or("unknown")
-                .to_string();
-            let duration_seconds = reconciler.get("duration_seconds").and_then(Value::as_f64);
-            let started_at = if status == "running" {
-                self.reconciler
-                    .as_ref()
-                    .and_then(|stats| stats.started_at)
-                    .or_else(|| Some(Instant::now()))
-            } else {
-                self.reconciler.as_ref().and_then(|stats| stats.started_at)
-            };
-            let preview_lines = read_codex_preview(
-                &run_dir.join("reconciler").join("stdout.jsonl"),
-                &run_dir.join("reconciler").join("stderr.log"),
-                80,
-            );
-            self.reconciler = Some(ReconcilerStats {
-                status,
-                duration_seconds,
-                started_at,
-                preview_lines,
-            });
+        if let Some(reconciler_value) = value.get("reconciler") {
+            if let Some(reconciler) = reconciler_value.as_object() {
+                let status = reconciler
+                    .get("status")
+                    .and_then(Value::as_str)
+                    .unwrap_or("unknown")
+                    .to_string();
+                let duration_seconds = reconciler.get("duration_seconds").and_then(Value::as_f64);
+                let started_at = if status == "running" {
+                    self.reconciler
+                        .as_ref()
+                        .and_then(|stats| stats.started_at)
+                        .or_else(|| Some(Instant::now()))
+                } else {
+                    self.reconciler.as_ref().and_then(|stats| stats.started_at)
+                };
+                let preview_lines = read_reconciler_preview(&run_dir, reconciler_value, 80);
+                self.reconciler = Some(ReconcilerStats {
+                    status,
+                    duration_seconds,
+                    started_at,
+                    preview_lines,
+                });
+            }
         }
     }
 }
@@ -792,6 +797,18 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>) -> Result<()> {
                 _ => {}
             }
         }
+    }
+}
+
+fn tmux_available() -> bool {
+    match Command::new("tmux")
+        .arg("-V")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+    {
+        Ok(status) => status.success(),
+        Err(_) => false,
     }
 }
 
@@ -1193,6 +1210,80 @@ fn style_for_status(status: &str) -> Style {
 
 fn is_terminal_status(status: &str) -> bool {
     matches!(status, "succeeded" | "failed" | "canceled")
+}
+
+fn read_worker_preview(
+    run_dir: &Path,
+    job_id: &str,
+    worker: &Value,
+    max_lines: usize,
+) -> Vec<String> {
+    if let Some(lines) = read_tmux_pane_preview(worker, max_lines) {
+        return lines;
+    }
+    if let Some(lines) = read_screen_file_preview(worker, max_lines) {
+        return lines;
+    }
+    read_codex_preview(
+        &run_dir.join("workers").join(job_id).join("stdout.jsonl"),
+        &run_dir.join("workers").join(job_id).join("stderr.log"),
+        max_lines,
+    )
+}
+
+fn read_reconciler_preview(run_dir: &Path, reconciler: &Value, max_lines: usize) -> Vec<String> {
+    if let Some(lines) = read_tmux_pane_preview(reconciler, max_lines) {
+        return lines;
+    }
+    if let Some(lines) = read_screen_file_preview(reconciler, max_lines) {
+        return lines;
+    }
+    read_codex_preview(
+        &run_dir.join("reconciler").join("stdout.jsonl"),
+        &run_dir.join("reconciler").join("stderr.log"),
+        max_lines,
+    )
+}
+
+fn read_tmux_pane_preview(value: &Value, max_lines: usize) -> Option<Vec<String>> {
+    let pane = value.get("pane_id").and_then(Value::as_str)?;
+    if pane.trim().is_empty() {
+        return None;
+    }
+    let output = Command::new("tmux")
+        .args(["capture-pane", "-p", "-t", pane])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    let lines = terminal_preview_lines(&text, max_lines);
+    (!lines.is_empty()).then_some(lines)
+}
+
+fn read_screen_file_preview(value: &Value, max_lines: usize) -> Option<Vec<String>> {
+    let path = value.get("screen_path").and_then(Value::as_str)?;
+    let text = fs::read_to_string(path).ok()?;
+    let lines = terminal_preview_lines(&text, max_lines);
+    (!lines.is_empty()).then_some(lines)
+}
+
+fn terminal_preview_lines(text: &str, max_lines: usize) -> Vec<String> {
+    let mut lines = tail_text_lines(text, max_lines.saturating_mul(2).max(max_lines))
+        .into_iter()
+        .map(|line| truncate_line(line.trim_end(), 220))
+        .collect::<Vec<_>>();
+
+    while lines.first().is_some_and(|line| line.trim().is_empty()) {
+        lines.remove(0);
+    }
+    while lines.last().is_some_and(|line| line.trim().is_empty()) {
+        lines.pop();
+    }
+
+    let start = lines.len().saturating_sub(max_lines);
+    lines[start..].to_vec()
 }
 
 fn read_codex_preview(stdout_path: &Path, stderr_path: &Path, max_lines: usize) -> Vec<String> {

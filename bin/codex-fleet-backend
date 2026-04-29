@@ -1889,6 +1889,34 @@ def headful_tmux(args: list[str], check: bool = True) -> subprocess.CompletedPro
     return run_cmd(["tmux", *args], check=check)
 
 
+def headful_create_hidden_session(root: pathlib.Path, session: str) -> str:
+    keeper = "sleep 100000000"
+    headful_tmux(
+        [
+            "new-session",
+            "-d",
+            "-x",
+            "200",
+            "-y",
+            "60",
+            "-s",
+            session,
+            "-c",
+            str(root),
+            keeper,
+        ]
+    )
+    result = headful_tmux(
+        ["display-message", "-p", "-t", f"{session}:0.0", "#{pane_id}"]
+    )
+    return result.stdout.strip()
+
+
+def headful_kill_session(session: str | None) -> None:
+    if session:
+        headful_tmux(["kill-session", "-t", session], check=False)
+
+
 def headful_capture_pane(pane: str) -> str:
     result = headful_tmux(["capture-pane", "-p", "-t", pane], check=False)
     return result.stdout if result.returncode == 0 else ""
@@ -2194,6 +2222,168 @@ def command_headful_controller(args: argparse.Namespace) -> int:
             continue
 
         return 0 if terminal_phase in {"completed", "workers_completed"} else 1
+
+
+async def run_headful_live(args: argparse.Namespace) -> int:
+    root = git_root()
+    state = ensure_state(root)
+    model = effective_model(args)
+    reasoning_effort = effective_reasoning_effort(args)
+
+    if not shutil.which("tmux"):
+        raise FleetError("Headful live mode requires tmux.")
+    if not shutil.which("codex"):
+        raise FleetError("Could not find `codex` on PATH.")
+    if not args.allow_dirty and not repo_is_clean(root):
+        raise FleetError(
+            "The repo has uncommitted changes. Re-run with --allow-dirty if you "
+            "intentionally want the reconciler to edit a dirty checkout."
+        )
+    if args.flush_queue:
+        removed = flush_queue(state)
+        if removed:
+            print_live(f"Flushed {removed} stale queued prompt(s).")
+
+    run_id = f"{compact_time()}-{random.randrange(1000, 9999)}"
+    session = f"codex-fleet-ui-{run_id}"
+    controller_pane = headful_create_hidden_session(root, session)
+
+    try:
+        run_dir = state / RUNS_DIR / run_id
+        run_dir.mkdir(parents=True, exist_ok=True)
+        (state / RUNS_DIR / "latest").write_text(run_id + "\n")
+
+        base_ref, base_sha, base_meta = resolve_base_ref(root, args.base)
+        run_state: dict[str, Any] = {
+            "run_id": run_id,
+            "repo_root": str(root),
+            "branch": current_branch(root),
+            "base_ref": base_ref,
+            "base_sha": base_sha,
+            "base": base_meta,
+            "started_at": now_iso(),
+            "completed_at": None,
+            "phase": "input_open",
+            "concurrency": args.jobs,
+            "model": model,
+            "reasoning_effort": reasoning_effort,
+            "jobs": {},
+            "workers": {},
+            "reconciler": None,
+            "mode": "headful-live",
+            "headful": {
+                "session": session,
+                "controller_pane": controller_pane,
+                "input_finished": False,
+                "auto_reconcile_delay": args.auto_reconcile_delay,
+                "deferred_message_count": 0,
+                "hidden_session": True,
+            },
+        }
+        write_json(run_dir / "run.json", run_state)
+        headful_event(
+            run_dir,
+            "headful_live_run_created",
+            run_id=run_id,
+            base_ref=base_ref,
+            base_sha=base_sha,
+            session=session,
+            controller_pane=controller_pane,
+            **base_meta,
+        )
+
+        print_live(f"Headful live run {run_id}: ready for prompts with concurrency {args.jobs}.")
+        print_live(f"Model: {model} ({reasoning_effort})")
+        print_live(f"Base: {format_base_summary(base_ref, base_sha, base_meta)}")
+        print_live(f"Telemetry: {rel_to_repo(root, run_dir)}")
+        print_live(f"Tmux session: {session}")
+        if args.allow_dirty:
+            print_live("Warning: --allow-dirty is enabled; reconciler will edit the current checkout.")
+
+        stop_input = threading.Event()
+        last_submit = {"monotonic": time.monotonic()}
+        monitor = threading.Thread(
+            target=headful_monitor_loop,
+            args=(root, run_id, args, controller_pane, stop_input, last_submit),
+            daemon=True,
+        )
+        monitor.start()
+        stdin_lines = await read_stdin_lines()
+        finish_requested = False
+
+        while not stop_input.is_set():
+            try:
+                raw_line = await asyncio.wait_for(stdin_lines.get(), timeout=0.2)
+            except asyncio.TimeoutError:
+                continue
+
+            if raw_line is None:
+                if finish_requested:
+                    print_live("stdin closed after finish; waiting for workers/reconciler")
+                    while not stop_input.is_set():
+                        await asyncio.sleep(0.2)
+                    break
+                headful_cancel_run(root, run_id, "stdin_closed")
+                print_live(f"Canceled run {run_id}; frontend stdin closed.")
+                return 130
+
+            line = raw_line.strip()
+            if not line:
+                continue
+
+            try:
+                message = json.loads(line)
+            except json.JSONDecodeError:
+                message = {"command": "prompt", "prompt": line}
+
+            command = message.get("command")
+            if command == "cancel":
+                headful_cancel_run(root, run_id, "frontend_cancel")
+                print_live(f"Canceled run {run_id}; removed active worktrees.")
+                return 130
+            if command == "finish":
+                finish_requested = True
+                headful_mark_input_finished(root, run_id)
+                print_live("input finished; waiting for workers/reconciler")
+                continue
+            if command == "prompt":
+                prompt = str(message.get("prompt") or "").strip()
+                if not prompt:
+                    continue
+                finish_requested = False
+                title = str(message.get("title") or first_heading_or_line(prompt, "job"))
+                try:
+                    job_id = headful_submit_prompt(root, run_id, args, controller_pane, prompt)
+                except FleetError as exc:
+                    print_live(f"prompt rejected: {exc}")
+                    continue
+                last_submit["monotonic"] = time.monotonic()
+                print_live(f"queued {job_id}: {title}")
+                continue
+
+            print_live(f"ignored unknown live message: {line[:120]}")
+
+        monitor.join(timeout=1.0)
+        data = headful_load_run(root, run_id)
+        phase = str(data.get("phase") or "unknown")
+        workers = data.get("workers") or {}
+        succeeded = [worker for worker in workers.values() if worker.get("status") == "succeeded"]
+        failed = [worker for worker in workers.values() if worker.get("status") == "failed"]
+        reconciler = data.get("reconciler") or {}
+        if reconciler:
+            print_live(
+                f"reconciler {reconciler.get('status')} "
+                f"in {format_duration(reconciler.get('duration_seconds'))}"
+            )
+        print_live(
+            "Headful live run finished: "
+            f"{len(succeeded)} worker(s) succeeded, {len(failed)} failed, "
+            f"phase {phase}."
+        )
+        print_live(f"Check health: codex-fleet health --run {run_id}")
+        return 0 if phase in {"completed", "workers_completed"} and not failed else 1
+    finally:
+        headful_kill_session(session)
 
 
 def headful_input_loop(
@@ -3199,6 +3389,20 @@ def build_parser() -> argparse.ArgumentParser:
     headful_reconciler.add_argument("--danger", action="store_true")
     headful_reconciler.add_argument("--search", action="store_true")
     headful_reconciler.set_defaults(func=command_headful_reconciler)
+
+    headful_live = sub.add_parser("headful-live", help=argparse.SUPPRESS)
+    headful_live.add_argument("-j", "--jobs", type=int, default=3)
+    headful_live.add_argument("--base")
+    headful_live.add_argument("--allow-dirty", action="store_true")
+    headful_live.add_argument("--no-reconcile", action="store_true")
+    headful_live.add_argument("--model", default=DEFAULT_MODEL)
+    headful_live.add_argument("--reasoning-effort", default=DEFAULT_REASONING_EFFORT)
+    headful_live.add_argument("--danger", action="store_true")
+    headful_live.add_argument("--search", action="store_true")
+    headful_live.add_argument("--flush-queue", action="store_true")
+    headful_live.add_argument("--auto-reconcile-when-idle", action="store_true")
+    headful_live.add_argument("--auto-reconcile-delay", type=float, default=1.0)
+    headful_live.set_defaults(func=lambda args: asyncio.run(run_headful_live(args)))
 
     live = sub.add_parser("live", help="stream prompts on stdin; each prompt starts a worker immediately")
     live.add_argument("-j", "--jobs", type=int, default=3, help="parallel worker count")

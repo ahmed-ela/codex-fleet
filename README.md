@@ -1,6 +1,6 @@
 # codex-fleet
 
-Parallel Codex CLI worker queue with isolated git worktrees, telemetry, and a Ratatui frontend.
+Parallel Codex CLI worker queue with jj-first local snapshots, isolated git worktrees, telemetry, and a Ratatui frontend.
 
 ## Usage
 
@@ -19,7 +19,7 @@ Default interactive behavior:
 
 Bare `codex-fleet` opens the Ratatui UI by default. The older tmux controller is still available as `codex-fleet headful`.
 
-The backend defaults to `gpt-5.5` with `xhigh` reasoning and uses git worktrees for worker isolation.
+The backend defaults to `gpt-5.5` with `xhigh` reasoning. In a jj-backed repo, Fleet snapshots `jj @` before a batch and uses that exact commit as the worker base. Workers still use git worktrees for broad tool compatibility, and Fleet records the final jj snapshot after direct apply or reconciliation. Git/GitHub remain the publish layer; push to `main` after the final reconciled checkout is the state you want.
 
 ## Project Layout
 

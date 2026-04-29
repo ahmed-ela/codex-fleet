@@ -394,29 +394,95 @@ def jj_template(root: pathlib.Path, template: str) -> str:
     return run_cmd(["jj", "log", "--no-graph", "-r", "@", "-T", template], cwd=root).stdout.strip()
 
 
+def current_jj_snapshot(root: pathlib.Path, reason: str) -> dict[str, Any] | None:
+    jj_root_path = jj_repo_root(root)
+    if jj_root_path != root.resolve():
+        return None
+    # Force jj to snapshot the working copy so @ names the current checkout state.
+    status = run_cmd(["jj", "status"], cwd=root, check=False)
+    if status.returncode != 0:
+        return None
+    commit_id = jj_template(root, 'commit_id ++ "\n"')
+    change_id = jj_template(root, 'change_id.short() ++ "\n"')
+    description = jj_template(root, 'description.first_line() ++ "\n"')
+    if not commit_id:
+        return None
+    return {
+        "vcs": "jj",
+        "snapshot_source": reason,
+        "jj_change_id": change_id,
+        "jj_commit_id": commit_id,
+        "jj_description": description,
+        "recorded_at": now_iso(),
+    }
+
+
+def final_snapshot_metadata(root: pathlib.Path, reason: str) -> dict[str, Any]:
+    jj_snapshot = current_jj_snapshot(root, reason)
+    if jj_snapshot:
+        return jj_snapshot
+    return {
+        "vcs": "git",
+        "snapshot_source": reason,
+        "git_head": run_cmd(["git", "rev-parse", "HEAD"], cwd=root, check=False).stdout.strip(),
+        "git_status_short": run_cmd(["git", "status", "--short"], cwd=root, check=False).stdout,
+        "recorded_at": now_iso(),
+    }
+
+
+def attach_final_snapshot_context(context: "RunContext", reason: str) -> dict[str, Any]:
+    snapshot = final_snapshot_metadata(context.root, reason)
+    context.run_state["final_snapshot"] = snapshot
+    event_fields = {"vcs": snapshot.get("vcs"), "snapshot_source": snapshot.get("snapshot_source")}
+    if snapshot.get("vcs") == "jj":
+        event_fields["jj_change_id"] = snapshot.get("jj_change_id")
+        event_fields["jj_commit_id"] = snapshot.get("jj_commit_id")
+    else:
+        event_fields["git_head"] = snapshot.get("git_head")
+    context.event("final_snapshot_recorded", **event_fields)
+    return snapshot
+
+
+def attach_final_snapshot_run_json(
+    root: pathlib.Path,
+    run_dir: pathlib.Path,
+    run_json: pathlib.Path,
+    reason: str,
+) -> dict[str, Any]:
+    snapshot = final_snapshot_metadata(root, reason)
+
+    def update(data: dict[str, Any]) -> None:
+        data["final_snapshot"] = snapshot
+
+    lock_run_state(run_json, update)
+    event_fields = {"vcs": snapshot.get("vcs"), "snapshot_source": snapshot.get("snapshot_source")}
+    if snapshot.get("vcs") == "jj":
+        event_fields["jj_change_id"] = snapshot.get("jj_change_id")
+        event_fields["jj_commit_id"] = snapshot.get("jj_commit_id")
+    else:
+        event_fields["git_head"] = snapshot.get("git_head")
+    headful_event(run_dir, "final_snapshot_recorded", **event_fields)
+    return snapshot
+
+
 def resolve_base_ref(root: pathlib.Path, explicit_base: str | None) -> tuple[str, str, dict[str, Any]]:
     if explicit_base:
         base_sha = run_cmd(["git", "rev-parse", explicit_base], cwd=root).stdout.strip()
         return explicit_base, base_sha, {"vcs": "git", "base_source": "explicit"}
 
-    jj_root_path = jj_repo_root(root)
-    if jj_root_path == root.resolve():
-        # Force jj to snapshot the current working copy before we read @.
-        run_cmd(["jj", "status"], cwd=root, check=False)
-        commit_id = jj_template(root, 'commit_id ++ "\n"')
-        change_id = jj_template(root, 'change_id.short() ++ "\n"')
-        description = jj_template(root, 'description.first_line() ++ "\n"')
-        if commit_id:
-            check = run_cmd(["git", "cat-file", "-e", f"{commit_id}^{{commit}}"], cwd=root, check=False)
-            if check.returncode == 0:
-                return commit_id, commit_id, {
-                    "vcs": "jj",
-                    "base_source": "jj_working_copy",
-                    "jj_change_id": change_id,
-                    "jj_commit_id": commit_id,
-                    "jj_description": description,
-                    "jj_snapshot_at": now_iso(),
-                }
+    jj_snapshot = current_jj_snapshot(root, "batch_base")
+    if jj_snapshot:
+        commit_id = str(jj_snapshot["jj_commit_id"])
+        check = run_cmd(["git", "cat-file", "-e", f"{commit_id}^{{commit}}"], cwd=root, check=False)
+        if check.returncode == 0:
+            return commit_id, commit_id, {
+                "vcs": "jj",
+                "base_source": "jj_snapshot",
+                "jj_change_id": jj_snapshot["jj_change_id"],
+                "jj_commit_id": commit_id,
+                "jj_description": jj_snapshot["jj_description"],
+                "jj_snapshot_at": jj_snapshot["recorded_at"],
+            }
 
     base_sha = run_cmd(["git", "rev-parse", "HEAD"], cwd=root).stdout.strip()
     return "HEAD", base_sha, {"vcs": "git", "base_source": "head"}
@@ -426,7 +492,7 @@ def format_base_summary(base_ref: str, base_sha: str, base_meta: dict[str, Any] 
     meta = base_meta or {}
     vcs = meta.get("vcs") or "git"
     source = meta.get("base_source") or "unknown"
-    if vcs == "jj" and source == "jj_working_copy":
+    if vcs == "jj" and source in {"jj_working_copy", "jj_snapshot"}:
         change_id = meta.get("jj_change_id") or "unknown-change"
         return f"jj @ {change_id} ({base_sha[:12]})"
     if source == "explicit":
@@ -1043,6 +1109,7 @@ async def run_reconciler(
     if process.returncode == 0:
         reconciler["status"] = "succeeded"
         context.run_state["phase"] = "completed"
+        attach_final_snapshot_context(context, "reconciler")
         context.event("reconciler_succeeded", duration_seconds=reconciler["duration_seconds"])
     else:
         reconciler["status"] = "failed"
@@ -1209,6 +1276,7 @@ async def run_batch(args: argparse.Namespace) -> int:
         context.run_state["phase"] = "completed"
         context.run_state["completed_at"] = now_iso()
         context.run_state["direct_apply"] = direct_apply
+        attach_final_snapshot_context(context, "direct_apply")
         context.save()
         context.event("single_worker_direct_applied", **direct_apply)
         print(
@@ -1485,6 +1553,7 @@ async def run_live(args: argparse.Namespace) -> int:
         context.run_state["phase"] = "completed"
         context.run_state["completed_at"] = now_iso()
         context.run_state["direct_apply"] = direct_apply
+        attach_final_snapshot_context(context, "direct_apply")
         context.save()
         context.event("single_worker_direct_applied", **direct_apply)
         print_live("single worker finished; reconciler skipped; changes applied directly")
@@ -1730,6 +1799,20 @@ def command_health(args: argparse.Namespace) -> int:
             f"| worker: {direct_apply.get('worker_id')}"
             f"{copied_text}"
         )
+
+    final_snapshot = data.get("final_snapshot") or {}
+    if final_snapshot:
+        if final_snapshot.get("vcs") == "jj":
+            print(
+                "Final snapshot: "
+                f"jj @ {final_snapshot.get('jj_change_id')} "
+                f"({str(final_snapshot.get('jj_commit_id') or '')[:12]})"
+            )
+        else:
+            print(
+                "Final snapshot: "
+                f"Git HEAD {str(final_snapshot.get('git_head') or '')[:12]}"
+            )
 
     print(f"Events: {rel_to_repo(root, run_dir / 'events.jsonl')}")
     print(f"Run JSON: {rel_to_repo(root, run_json)}")
@@ -2943,6 +3026,7 @@ def headful_monitor_loop(
                 state["direct_apply"] = direct_apply
 
             lock_run_state(run_json, mark_direct_applied)
+            attach_final_snapshot_run_json(root, run_dir, run_json, "direct_apply")
             headful_event(run_dir, "headful_single_worker_direct_applied", **direct_apply)
             stop_input.set()
             return
@@ -3235,10 +3319,13 @@ def command_headful_reconciler(args: argparse.Namespace) -> int:
     final_stat = run_cmd(["git", "diff", "--stat"], cwd=root, check=False).stdout
     (reconciler_dir / "final-git-status.txt").write_text(final_status)
     (reconciler_dir / "final-diff-stat.txt").write_text(final_stat)
+    final_snapshot = final_snapshot_metadata(root, "reconciler") if exit_code == 0 else None
 
     def mark_done(data: dict[str, Any]) -> None:
         data["phase"] = "completed" if exit_code == 0 else "reconciler_failed"
         data["completed_at"] = now_iso()
+        if final_snapshot:
+            data["final_snapshot"] = final_snapshot
         data["reconciler"].update(
             {
                 "status": "succeeded" if exit_code == 0 else "failed",
@@ -3253,6 +3340,17 @@ def command_headful_reconciler(args: argparse.Namespace) -> int:
         )
 
     lock_run_state(run_json, mark_done)
+    if final_snapshot:
+        event_fields = {
+            "vcs": final_snapshot.get("vcs"),
+            "snapshot_source": final_snapshot.get("snapshot_source"),
+        }
+        if final_snapshot.get("vcs") == "jj":
+            event_fields["jj_change_id"] = final_snapshot.get("jj_change_id")
+            event_fields["jj_commit_id"] = final_snapshot.get("jj_commit_id")
+        else:
+            event_fields["git_head"] = final_snapshot.get("git_head")
+        headful_event(run_dir, "final_snapshot_recorded", **event_fields)
     headful_event(
         run_dir,
         "headful_reconciler_succeeded" if exit_code == 0 else "headful_reconciler_failed",

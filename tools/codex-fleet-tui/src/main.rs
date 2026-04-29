@@ -1060,11 +1060,6 @@ fn render_workspace_control(frame: &mut Frame, app: &App) {
 }
 
 fn workspace_status_line(app: &App) -> String {
-    let running = app
-        .jobs
-        .iter()
-        .filter(|job| !is_terminal_status(&job.status))
-        .count();
     let done = app
         .jobs
         .iter()
@@ -1073,14 +1068,10 @@ fn workspace_status_line(app: &App) -> String {
     let failed = app.jobs.iter().filter(|job| job.status == "failed").count();
     let mut parts = vec![
         format!("Fleet {}", fleet_timer_text(app)),
-        format!("run {running}"),
         format!("done {done}"),
     ];
     if failed > 0 {
         parts.push(format!("fail {failed}"));
-    }
-    if !app.message_queue.is_empty() {
-        parts.push(format!("next {}", app.message_queue.len()));
     }
     if let Some(reconciler) = app.reconciler.as_ref() {
         parts.push(format!(
@@ -1089,7 +1080,7 @@ fn workspace_status_line(app: &App) -> String {
             format_duration(reconciler_display_duration(reconciler))
         ));
     }
-    parts.push("Enter start | Tab later | Ctrl-C clear/cancel".to_string());
+    parts.push("Ctrl-C clear/cancel".to_string());
     parts.join("  ")
 }
 
@@ -1098,7 +1089,11 @@ fn workspace_job_lines(app: &App, max_lines: usize) -> Vec<String> {
         return Vec::new();
     }
 
-    let mut lines = app
+    if max_lines == 1 {
+        return vec![workspace_compact_queue_summary(app)];
+    }
+
+    let agent_rows = app
         .jobs
         .iter()
         .enumerate()
@@ -1118,26 +1113,109 @@ fn workspace_job_lines(app: &App, max_lines: usize) -> Vec<String> {
         })
         .collect::<Vec<_>>();
 
-    if !app.message_queue.is_empty() {
-        lines.push(format!(
-            "next batch: {} message(s)",
-            app.message_queue.len()
-        ));
-    }
+    let next_rows = app
+        .message_queue
+        .iter()
+        .enumerate()
+        .map(|(index, message)| {
+            format!(
+                "#{} {}",
+                index + 1,
+                prompt_title(&message.prompt, message.pasted)
+            )
+        })
+        .collect::<Vec<_>>();
+
+    let mut agent_rows = agent_rows;
     if let Some(reconciler) = app.reconciler.as_ref() {
-        lines.push(format!(
+        agent_rows.push(format!(
             "R {} {} {}",
             reconciler.status,
             format_duration(reconciler_display_duration(reconciler)),
             workspace_preview_pane_label(&reconciler.preview_lines).unwrap_or_default()
         ));
     }
-    if lines.is_empty() {
-        lines.push("ready".to_string());
+
+    let show_next = !next_rows.is_empty() || agent_rows.is_empty();
+    if show_next {
+        workspace_two_sections(app, agent_rows, next_rows, max_lines)
+    } else {
+        let mut lines = vec![workspace_agents_header(app)];
+        lines.extend(lines_with_more(agent_rows, max_lines.saturating_sub(1)));
+        lines
+    }
+}
+
+fn workspace_two_sections(
+    app: &App,
+    agent_rows: Vec<String>,
+    next_rows: Vec<String>,
+    max_lines: usize,
+) -> Vec<String> {
+    let header_count = 2usize;
+    if max_lines <= header_count {
+        return vec![workspace_compact_queue_summary(app)];
     }
 
-    let start = lines.len().saturating_sub(max_lines);
-    lines[start..].to_vec()
+    let item_budget = max_lines - header_count;
+    let agent_budget = if agent_rows.is_empty() {
+        0
+    } else if next_rows.is_empty() {
+        item_budget
+    } else {
+        cmp::max(1, item_budget.div_ceil(2))
+    };
+    let next_budget = item_budget.saturating_sub(agent_budget);
+
+    let mut lines = vec![workspace_agents_header(app)];
+    lines.extend(lines_with_more(agent_rows, agent_budget));
+    lines.push(workspace_next_header(app));
+    lines.extend(lines_with_more(next_rows, next_budget));
+    lines
+}
+
+fn lines_with_more(rows: Vec<String>, budget: usize) -> Vec<String> {
+    if rows.len() <= budget {
+        return rows;
+    }
+    if budget == 0 {
+        return Vec::new();
+    }
+    if budget == 1 {
+        return vec![format!("+{} more", rows.len())];
+    }
+
+    let visible_count = budget - 1;
+    let hidden_count = rows.len().saturating_sub(visible_count);
+    let mut lines = rows.into_iter().take(visible_count).collect::<Vec<_>>();
+    lines.push(format!("+{hidden_count} more"));
+    lines
+}
+
+fn workspace_agents_header(app: &App) -> String {
+    let running = app
+        .jobs
+        .iter()
+        .filter(|job| !is_terminal_status(&job.status))
+        .count();
+    format!("Agents  [Enter] start now  {running} running")
+}
+
+fn workspace_next_header(app: &App) -> String {
+    let waiting = app.message_queue.len();
+    format!("Next  [Tab] queue later  {waiting} waiting")
+}
+
+fn workspace_compact_queue_summary(app: &App) -> String {
+    let running = app
+        .jobs
+        .iter()
+        .filter(|job| !is_terminal_status(&job.status))
+        .count();
+    format!(
+        "Agents [Enter] {running} running  |  Next [Tab] {} waiting",
+        app.message_queue.len()
+    )
 }
 
 fn workspace_pane_label(job: &SubmittedJob) -> String {
@@ -1707,5 +1785,14 @@ mod tests {
         let value = "typed ".repeat(80);
         assert!(compact_input_display(&value, false).is_none());
         assert!(!prompt_title(&value, false).contains("[pasted:"));
+    }
+
+    #[test]
+    fn rows_are_capped_with_more_summary() {
+        let rows = vec!["one".to_string(), "two".to_string(), "three".to_string()];
+        assert_eq!(
+            lines_with_more(rows, 2),
+            vec!["one".to_string(), "+2 more".to_string()]
+        );
     }
 }

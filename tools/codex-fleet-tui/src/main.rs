@@ -72,7 +72,8 @@ struct App {
     run_dir: Option<PathBuf>,
     phase: Option<String>,
     reconciler: Option<ReconcilerStats>,
-    started_at: Instant,
+    batch_started_at: Option<Instant>,
+    batch_finished_seconds: Option<f64>,
     last_stats_refresh: Instant,
     history: Vec<String>,
     history_index: Option<usize>,
@@ -99,7 +100,8 @@ impl App {
             run_dir: None,
             phase: None,
             reconciler: None,
-            started_at: Instant::now(),
+            batch_started_at: None,
+            batch_finished_seconds: None,
             last_stats_refresh: Instant::now(),
             history: Vec::new(),
             history_index: None,
@@ -229,14 +231,10 @@ impl App {
                 BackendEvent::Line(line) => self.add_log(line),
                 BackendEvent::Done(code) => {
                     self.backend_stdin = None;
+                    self.finish_batch_timer();
                     if !self.canceling && code == 0 && !self.message_queue.is_empty() {
                         let queued = self.message_queue.drain(..).collect::<Vec<_>>();
-                        self.jobs.clear();
-                        self.run_dir = None;
-                        self.phase = None;
-                        self.reconciler = None;
-                        self.done = false;
-                        self.exit_code = 0;
+                        self.reset_for_next_run();
                         self.status = format!(
                             "starting next batch from {} queued message(s)",
                             queued.len()
@@ -256,11 +254,11 @@ impl App {
                     self.status = if self.canceling {
                         "canceled and cleaned; exiting".to_string()
                     } else if code == 0 {
-                        "finished; exiting".to_string()
+                        "done; Enter starts again".to_string()
                     } else {
                         format!("backend exited with {code}; press q to exit")
                     };
-                    if self.canceling || code == 0 {
+                    if self.canceling {
                         self.should_quit = true;
                     }
                 }
@@ -268,8 +266,40 @@ impl App {
         }
     }
 
+    fn reset_for_next_run(&mut self) {
+        self.jobs.clear();
+        self.run_dir = None;
+        self.phase = None;
+        self.reconciler = None;
+        self.done = false;
+        self.exit_code = 0;
+        self.batch_started_at = None;
+        self.batch_finished_seconds = None;
+    }
+
+    fn restart_after_done_if_needed(&mut self) {
+        if self.done && !self.canceling && self.exit_code == 0 {
+            self.reset_for_next_run();
+            self.start_backend(self.sender.clone());
+        }
+    }
+
+    fn start_batch_timer_if_needed(&mut self) {
+        if self.batch_started_at.is_none() {
+            self.batch_started_at = Some(Instant::now());
+            self.batch_finished_seconds = None;
+        }
+    }
+
+    fn finish_batch_timer(&mut self) {
+        if let Some(started_at) = self.batch_started_at {
+            self.batch_finished_seconds = Some(started_at.elapsed().as_secs_f64());
+            self.batch_started_at = None;
+        }
+    }
+
     fn submit_prompt(&mut self) {
-        if self.done || self.canceling {
+        if self.canceling || (self.done && self.exit_code != 0) {
             return;
         }
 
@@ -278,6 +308,8 @@ impl App {
             self.status = "empty prompt; type something first".to_string();
             return;
         }
+
+        self.restart_after_done_if_needed();
 
         if !self.backend_accepts_immediate() {
             self.queue_prompt_for_next_batch(prompt, "current batch is already applying");
@@ -288,7 +320,7 @@ impl App {
     }
 
     fn submit_prompt_text(&mut self, prompt: String, source: &str) {
-        if self.done || self.canceling {
+        if self.canceling || (self.done && self.exit_code != 0) {
             return;
         }
 
@@ -312,6 +344,8 @@ impl App {
             return;
         }
 
+        self.start_batch_timer_if_needed();
+
         let title = prompt.chars().take(72).collect::<String>();
         self.jobs.push(SubmittedJob {
             id: None,
@@ -334,7 +368,7 @@ impl App {
     }
 
     fn queue_message(&mut self) {
-        if self.done || self.canceling {
+        if self.canceling || (self.done && self.exit_code != 0) {
             return;
         }
 
@@ -344,6 +378,7 @@ impl App {
             return;
         }
 
+        self.restart_after_done_if_needed();
         self.queue_prompt_for_next_batch(prompt, "queued message");
 
         if self.jobs.is_empty() {
@@ -425,7 +460,7 @@ impl App {
     }
 
     fn insert_input_text(&mut self, text: &str) {
-        if self.done || self.canceling {
+        if self.canceling || (self.done && self.exit_code != 0) {
             return;
         }
         let text = text.replace("\r\n", "\n").replace('\r', "\n");
@@ -548,7 +583,11 @@ impl App {
     }
 
     fn finish(&mut self) {
-        if self.done || self.canceling {
+        if self.done {
+            self.should_quit = true;
+            return;
+        }
+        if self.canceling {
             return;
         }
 
@@ -758,7 +797,7 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>) -> Result<()> {
 
 fn handle_key(app: &mut App, key: KeyEvent) {
     if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
-        if !app.input.is_empty() && !app.done && !app.canceling {
+        if !app.input.is_empty() && !app.canceling && (!app.done || app.exit_code == 0) {
             app.input.clear();
             app.input_cursor = 0;
             app.history_index = None;
@@ -770,7 +809,7 @@ fn handle_key(app: &mut App, key: KeyEvent) {
         return;
     }
 
-    if app.done {
+    if app.done && app.exit_code != 0 {
         match key.code {
             KeyCode::Char('q') | KeyCode::Esc | KeyCode::Enter => app.should_quit = true,
             _ => {}
@@ -852,10 +891,7 @@ fn render(frame: &mut Frame, app: &App) {
                 .add_modifier(Modifier::BOLD),
         ),
         Span::raw("  "),
-        Span::styled(
-            format_duration(app.started_at.elapsed().as_secs_f64()),
-            Style::default().fg(Color::Yellow),
-        ),
+        Span::styled(fleet_timer_text(app), Style::default().fg(Color::Yellow)),
         Span::raw("  "),
         Span::raw(app.status.as_str()),
     ]))
@@ -1120,6 +1156,16 @@ fn reconciler_display_duration(reconciler: &ReconcilerStats) -> f64 {
             0.0
         }
     })
+}
+
+fn fleet_timer_text(app: &App) -> String {
+    if let Some(started_at) = app.batch_started_at {
+        return format_duration(started_at.elapsed().as_secs_f64());
+    }
+    if let Some(seconds) = app.batch_finished_seconds {
+        return format_duration(seconds);
+    }
+    "idle".to_string()
 }
 
 fn format_duration(seconds: f64) -> String {

@@ -184,8 +184,7 @@ impl App {
             };
             let _ = sender.send(BackendEvent::Done(code));
         });
-        self.status =
-            "type a prompt; Enter starts now, Tab queues for after this batch".to_string();
+        self.status = "Enter starts now; Tab queues later".to_string();
         self.add_log(format!("backend: {backend}"));
     }
 
@@ -330,7 +329,7 @@ impl App {
         self.history_draft.clear();
         self.input.clear();
         self.input_cursor = 0;
-        self.status = format!("queued job {}; worker starts now", self.jobs.len());
+        self.status = format!("job {} started", self.jobs.len());
         self.add_log(format!("{source} job {}: {title}", self.jobs.len()));
     }
 
@@ -361,10 +360,7 @@ impl App {
         self.message_queue.push_back(prompt);
         self.input.clear();
         self.input_cursor = 0;
-        self.status = format!(
-            "message queued for next batch ({} pending)",
-            self.message_queue.len()
-        );
+        self.status = format!("queued for next batch ({})", self.message_queue.len());
         self.add_log(format!(
             "{source}: queued message {} for after this batch",
             self.message_queue.len()
@@ -376,7 +372,7 @@ impl App {
             return;
         }
         let queued = self.message_queue.drain(..).collect::<Vec<_>>();
-        self.status = format!("starting batch from {} queued message(s)", queued.len());
+        self.status = format!("starting {} queued message(s)", queued.len());
         self.add_log(format!(
             "message queue: starting batch from {} queued message(s)",
             queued.len()
@@ -441,10 +437,7 @@ impl App {
         self.input_cursor += text.chars().count();
         self.history_index = None;
         self.history_draft.clear();
-        self.status = format!(
-            "pasted {} chars; Enter starts now, Tab queues later",
-            text.chars().count()
-        );
+        self.status = format!("pasted {} chars", text.chars().count());
     }
 
     fn delete_input_before_cursor(&mut self) {
@@ -853,7 +846,7 @@ fn render(frame: &mut Frame, app: &App) {
 
     let header = Paragraph::new(Line::from(vec![
         Span::styled(
-            "Codex Fleet",
+            "Fleet",
             Style::default()
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
@@ -889,42 +882,28 @@ fn render(frame: &mut Frame, app: &App) {
                 .fg(Color::Green)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::raw(" start now  "),
+        Span::raw(" start  "),
         Span::styled(
             "Tab",
             Style::default()
                 .fg(Color::Green)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::raw(" queue next batch  "),
+        Span::raw(" later  "),
         Span::styled(
             "Ctrl-D",
             Style::default()
                 .fg(Color::Green)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::raw(" idle exit  "),
+        Span::raw(" done  "),
         Span::styled(
             "Ctrl-C",
             Style::default()
                 .fg(Color::Green)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::raw(" clear/cancel  "),
-        Span::styled(
-            "Esc",
-            Style::default()
-                .fg(Color::Green)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::raw(" cancel  "),
-        Span::styled(
-            "q",
-            Style::default()
-                .fg(Color::Green)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::raw(" quit after done"),
+        Span::raw(" clear/cancel"),
     ]))
     .block(Block::default().borders(Borders::ALL));
     frame.render_widget(footer, chunks[3]);
@@ -955,19 +934,31 @@ fn render_preview_dashboard(frame: &mut Frame, area: Rect, app: &App) {
 
 fn build_preview_panes(app: &App) -> Vec<PreviewPane> {
     if app.jobs.is_empty() {
-        let mut lines = app.logs.iter().cloned().collect::<Vec<String>>();
-        if lines.is_empty() {
-            lines.push("no submitted jobs yet".to_string());
+        let mut lines = vec![
+            format!("phase: {}", app.phase.as_deref().unwrap_or("starting")),
+            "workers: 0".to_string(),
+            format!("next batch: {}", app.message_queue.len()),
+        ];
+        if let Some(run_dir) = app.run_dir.as_ref() {
+            lines.push(format!("telemetry: {}", run_dir.display()));
+        } else {
+            lines.push("telemetry: starting".to_string());
         }
         if !app.message_queue.is_empty() {
-            lines.push(format!(
-                "{} message(s) queued for next batch",
-                app.message_queue.len()
-            ));
+            lines.push(String::new());
+            lines.extend(
+                app.message_queue
+                    .iter()
+                    .enumerate()
+                    .map(|(index, message)| {
+                        format!("#{} {}", index + 1, truncate_line(message, 180))
+                    }),
+            );
+        } else if let Some(last_log) = app.logs.back() {
+            lines.push(format!("last: {}", truncate_line(last_log, 180)));
         }
-        lines.push("Reconciler: idle".to_string());
         return vec![PreviewPane {
-            title: "Fleet".to_string(),
+            title: "Run".to_string(),
             status: "idle".to_string(),
             lines,
         }];

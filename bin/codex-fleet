@@ -18,11 +18,15 @@ repo_tui="$repo_root/tools/codex-fleet-tui/target/release/codex-fleet-tui"
 tui="${CODEX_FLEET_TUI:-$repo_tui}"
 
 if [ "$#" -eq 0 ]; then
-  if [ -t 0 ] && [ -t 1 ] && command -v tmux >/dev/null 2>&1; then
-    exec "$backend" headful
-  fi
   if [ -t 0 ] && [ -t 1 ] && [ -x "$tui" ]; then
     CODEX_FLEET_BACKEND="$backend" exec "$tui"
+  fi
+  if [ -t 0 ] && [ -t 1 ] && [ ! -x "$tui" ] && command -v cargo >/dev/null 2>&1; then
+    (cd "$repo_root/tools/codex-fleet-tui" && cargo build --release >/dev/null)
+    CODEX_FLEET_BACKEND="$backend" exec "$tui"
+  fi
+  if [ -t 0 ] && [ -t 1 ] && command -v tmux >/dev/null 2>&1; then
+    exec "$backend" headful
   fi
   exec "$backend" quick
 fi

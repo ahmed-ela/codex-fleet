@@ -1,0 +1,3143 @@
+#!/usr/bin/env python3
+"""
+Run multiple Codex CLI jobs in isolated git worktrees, then reconcile them.
+
+State lives in the current repo under .codex-fleet/:
+  queue/                 pending prompt files
+  runs/<run_id>/          telemetry, worker logs, diffs, reconciler artifacts
+  worktrees/<run_id>/     per-job git worktrees
+"""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import contextlib
+import datetime as dt
+import fcntl
+import json
+import os
+import pathlib
+import random
+import re
+import shutil
+import select
+import shlex
+import signal
+import subprocess
+import sys
+import tarfile
+import termios
+import threading
+import textwrap
+import time
+import tty
+from typing import Any
+
+
+STATE_DIR = ".codex-fleet"
+QUEUE_DIR = "queue"
+RUNS_DIR = "runs"
+WORKTREES_DIR = "worktrees"
+ARCHIVE_DIR = "archive"
+DEFAULT_MODEL = "gpt-5.5"
+DEFAULT_REASONING_EFFORT = "xhigh"
+
+
+def now_iso() -> str:
+    return dt.datetime.now(dt.timezone.utc).astimezone().isoformat(timespec="seconds")
+
+
+def compact_time() -> str:
+    return dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+
+
+def slugify(value: str, fallback: str = "job") -> str:
+    value = value.strip().lower()
+    value = re.sub(r"[^a-z0-9]+", "-", value)
+    value = value.strip("-")
+    return (value or fallback)[:60]
+
+
+def print_err(message: str) -> None:
+    print(message, file=sys.stderr)
+
+
+def print_live(message: str) -> None:
+    print(message, flush=True)
+
+
+class FleetError(RuntimeError):
+    pass
+
+
+def run_cmd(
+    args: list[str],
+    cwd: pathlib.Path | None = None,
+    check: bool = True,
+    input_text: str | None = None,
+) -> subprocess.CompletedProcess[str]:
+    result = subprocess.run(
+        args,
+        cwd=str(cwd) if cwd else None,
+        input=input_text,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if check and result.returncode != 0:
+        command = " ".join(args)
+        raise FleetError(
+            f"Command failed ({result.returncode}): {command}\n"
+            f"stdout:\n{result.stdout}\n"
+            f"stderr:\n{result.stderr}"
+        )
+    return result
+
+
+def git_root() -> pathlib.Path:
+    result = run_cmd(["git", "rev-parse", "--show-toplevel"], check=False)
+    if result.returncode != 0:
+        raise FleetError("codex-fleet must be run inside a Git repository.")
+    return pathlib.Path(result.stdout.strip()).resolve()
+
+
+def rel_to_repo(root: pathlib.Path, path: pathlib.Path) -> str:
+    with contextlib.suppress(ValueError):
+        return str(path.resolve().relative_to(root))
+    return str(path)
+
+
+def ensure_state(root: pathlib.Path) -> pathlib.Path:
+    state = root / STATE_DIR
+    for name in (QUEUE_DIR, RUNS_DIR, WORKTREES_DIR, ARCHIVE_DIR):
+        (state / name).mkdir(parents=True, exist_ok=True)
+
+    info_exclude = root / ".git" / "info" / "exclude"
+    if info_exclude.exists():
+        text = info_exclude.read_text(errors="replace")
+        if f"{STATE_DIR}/" not in text.splitlines():
+            suffix = "" if text.endswith("\n") or not text else "\n"
+            info_exclude.write_text(text + suffix + f"{STATE_DIR}/\n")
+    return state
+
+
+def latest_run_id(state: pathlib.Path) -> str | None:
+    latest_file = state / RUNS_DIR / "latest"
+    if latest_file.exists():
+        value = latest_file.read_text(errors="replace").strip()
+        if value:
+            return value
+    run_dirs = [p for p in (state / RUNS_DIR).iterdir() if p.is_dir()]
+    if not run_dirs:
+        return None
+    return sorted(run_dirs, key=lambda p: p.name)[-1].name
+
+
+def write_json(path: pathlib.Path, data: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
+    tmp.replace(path)
+
+
+def append_jsonl(path: pathlib.Path, data: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(data, sort_keys=True) + "\n")
+
+
+def parse_frontmatter(path: pathlib.Path) -> tuple[dict[str, str], str]:
+    text = path.read_text(errors="replace")
+    if not text.startswith("---\n"):
+        return {}, text
+
+    lines = text.splitlines()
+    end_index: int | None = None
+    for index in range(1, len(lines)):
+        if lines[index].strip() == "---":
+            end_index = index
+            break
+    if end_index is None:
+        return {}, text
+
+    meta: dict[str, str] = {}
+    for line in lines[1:end_index]:
+        if ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        meta[key.strip()] = value.strip()
+    body = "\n".join(lines[end_index + 1 :]).lstrip("\n")
+    if text.endswith("\n"):
+        body += "\n"
+    return meta, body
+
+
+def first_heading_or_line(body: str, fallback: str) -> str:
+    for raw in body.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        if line.startswith("#"):
+            return line.lstrip("#").strip() or fallback
+        return line[:80]
+    return fallback
+
+
+def queue_files(state: pathlib.Path) -> list[pathlib.Path]:
+    queue = state / QUEUE_DIR
+    return sorted(p for p in queue.glob("*.md") if p.is_file())
+
+
+def flush_queue(state: pathlib.Path) -> int:
+    removed = 0
+    for path in queue_files(state):
+        path.unlink()
+        removed += 1
+    return removed
+
+
+def archive_worktree_for_cleanup(state: pathlib.Path, run_id: str, worktree: pathlib.Path) -> None:
+    worker_dir = state / RUNS_DIR / run_id / "workers" / worktree.name
+    worker_dir.mkdir(parents=True, exist_ok=True)
+
+    status = run_cmd(["git", "status", "--short"], cwd=worktree, check=False)
+    diff = run_cmd(["git", "diff", "--binary"], cwd=worktree, check=False)
+    untracked = run_cmd(
+        ["git", "ls-files", "--others", "--exclude-standard", "-z"],
+        cwd=worktree,
+        check=False,
+    )
+
+    (worker_dir / "cleanup-git-status.txt").write_text(status.stdout)
+    (worker_dir / "cleanup-diff.patch").write_text(diff.stdout)
+
+    untracked_paths = [item for item in untracked.stdout.split("\0") if item]
+    (worker_dir / "cleanup-untracked-files.txt").write_text(
+        "".join(f"{path}\n" for path in untracked_paths)
+    )
+    if untracked_paths:
+        with tarfile.open(worker_dir / "cleanup-untracked-files.tar", "w") as archive:
+            for rel_path in untracked_paths:
+                source = worktree / rel_path
+                if source.exists() and not source.is_dir():
+                    archive.add(source, arcname=rel_path, recursive=False)
+
+    (worker_dir / "cleanup-archive.json").write_text(
+        json.dumps(
+            {
+                "archived_at": now_iso(),
+                "worktree": str(worktree),
+                "status_exit_code": status.returncode,
+                "diff_exit_code": diff.returncode,
+                "untracked_exit_code": untracked.returncode,
+                "tracked_diff_bytes": len(diff.stdout.encode()),
+                "untracked_files": len(untracked_paths),
+            },
+            indent=2,
+        )
+        + "\n"
+    )
+
+
+def remove_run_worktrees(root: pathlib.Path, state: pathlib.Path, run_id: str, verbose: bool = False) -> int:
+    worktree_root = state / WORKTREES_DIR / run_id
+    if not worktree_root.exists():
+        return 0
+
+    removed = 0
+    for worktree in sorted(worktree_root.iterdir()):
+        if not worktree.is_dir():
+            continue
+        archive_worktree_for_cleanup(state, run_id, worktree)
+        result = run_cmd(["git", "worktree", "remove", "--force", str(worktree)], cwd=root, check=False)
+        if result.returncode == 0:
+            removed += 1
+        elif verbose:
+            print_err(result.stderr.strip())
+
+    with contextlib.suppress(OSError):
+        worktree_root.rmdir()
+    return removed
+
+
+def job_from_file(path: pathlib.Path) -> dict[str, Any]:
+    meta, body = parse_frontmatter(path)
+    job_id = meta.get("id") or path.stem
+    title = meta.get("title") or first_heading_or_line(body, path.stem)
+    layer = meta.get("layer") or "default"
+    return {
+        "id": job_id,
+        "title": title,
+        "layer": layer,
+        "path": str(path),
+        "body": body,
+        "meta": meta,
+    }
+
+
+def create_job(state: pathlib.Path, body: str, title: str | None, layer: str) -> pathlib.Path:
+    body = body.strip()
+    if not body:
+        raise FleetError("Refusing to enqueue an empty prompt.")
+
+    inferred_title = title or first_heading_or_line(body, "job")
+    job_id = f"{compact_time()}-{random.randrange(100000, 999999)}-{slugify(inferred_title)}"
+    path = state / QUEUE_DIR / f"{job_id}.md"
+    content = (
+        "---\n"
+        f"id: {job_id}\n"
+        f"title: {inferred_title}\n"
+        f"layer: {layer}\n"
+        f"created_at: {now_iso()}\n"
+        "---\n\n"
+        f"{body}\n"
+    )
+    path.write_text(content)
+    return path
+
+
+def job_file_content(job_id: str, body: str, title: str, layer: str) -> str:
+    return (
+        "---\n"
+        f"id: {job_id}\n"
+        f"title: {title}\n"
+        f"layer: {layer}\n"
+        f"created_at: {now_iso()}\n"
+        "---\n\n"
+        f"{body.strip()}\n"
+    )
+
+
+def split_capture(text: str, separator: str) -> list[str]:
+    chunks: list[list[str]] = [[]]
+    for line in text.splitlines():
+        if line.strip() == separator:
+            chunks.append([])
+        else:
+            chunks[-1].append(line)
+    return ["\n".join(chunk).strip() for chunk in chunks if "\n".join(chunk).strip()]
+
+
+def capture_interactive(separator: str) -> list[str]:
+    print("Interactive capture is live.")
+    print(f"- Type `{separator}` on its own line to finish the current job and start another.")
+    print("- Type `:run` to start the batch.")
+    print("- Ctrl-D also starts the batch with whatever you typed.")
+    print("- Type `:cancel` to exit without queuing.")
+
+    chunks: list[str] = []
+    current: list[str] = []
+    job_number = 1
+
+    while True:
+        try:
+            line = input(f"job {job_number}> ")
+        except EOFError:
+            print()
+            break
+
+        stripped = line.strip()
+        if stripped == ":cancel":
+            raise FleetError("Capture cancelled.")
+        if stripped == ":run":
+            break
+        if stripped == separator:
+            body = "\n".join(current).strip()
+            if body:
+                chunks.append(body)
+                print(f"captured job {job_number} ({len(body)} chars)")
+                job_number += 1
+                current = []
+            else:
+                print(f"job {job_number} is empty; still waiting for prompt text")
+            continue
+
+        current.append(line)
+
+    body = "\n".join(current).strip()
+    if body:
+        chunks.append(body)
+        print(f"captured job {job_number} ({len(body)} chars)")
+    return chunks
+
+
+def current_branch(root: pathlib.Path) -> str:
+    result = run_cmd(["git", "branch", "--show-current"], cwd=root, check=False)
+    return result.stdout.strip() or "DETACHED"
+
+
+def jj_repo_root(root: pathlib.Path) -> pathlib.Path | None:
+    if not shutil.which("jj"):
+        return None
+    result = run_cmd(["jj", "root"], cwd=root, check=False)
+    if result.returncode != 0:
+        return None
+    with contextlib.suppress(OSError):
+        return pathlib.Path(result.stdout.strip()).resolve()
+    return None
+
+
+def jj_template(root: pathlib.Path, template: str) -> str:
+    return run_cmd(["jj", "log", "--no-graph", "-r", "@", "-T", template], cwd=root).stdout.strip()
+
+
+def resolve_base_ref(root: pathlib.Path, explicit_base: str | None) -> tuple[str, str, dict[str, Any]]:
+    if explicit_base:
+        base_sha = run_cmd(["git", "rev-parse", explicit_base], cwd=root).stdout.strip()
+        return explicit_base, base_sha, {"vcs": "git", "base_source": "explicit"}
+
+    jj_root_path = jj_repo_root(root)
+    if jj_root_path == root.resolve():
+        # Force jj to snapshot the current working copy before we read @.
+        run_cmd(["jj", "status"], cwd=root, check=False)
+        commit_id = jj_template(root, 'commit_id ++ "\n"')
+        change_id = jj_template(root, 'change_id.short() ++ "\n"')
+        description = jj_template(root, 'description.first_line() ++ "\n"')
+        if commit_id:
+            check = run_cmd(["git", "cat-file", "-e", f"{commit_id}^{{commit}}"], cwd=root, check=False)
+            if check.returncode == 0:
+                return commit_id, commit_id, {
+                    "vcs": "jj",
+                    "base_source": "jj_working_copy",
+                    "jj_change_id": change_id,
+                    "jj_commit_id": commit_id,
+                    "jj_description": description,
+                    "jj_snapshot_at": now_iso(),
+                }
+
+    base_sha = run_cmd(["git", "rev-parse", "HEAD"], cwd=root).stdout.strip()
+    return "HEAD", base_sha, {"vcs": "git", "base_source": "head"}
+
+
+def format_base_summary(base_ref: str, base_sha: str, base_meta: dict[str, Any] | None) -> str:
+    meta = base_meta or {}
+    vcs = meta.get("vcs") or "git"
+    source = meta.get("base_source") or "unknown"
+    if vcs == "jj" and source == "jj_working_copy":
+        change_id = meta.get("jj_change_id") or "unknown-change"
+        return f"jj @ {change_id} ({base_sha[:12]})"
+    if source == "explicit":
+        return f"explicit Git ref {base_ref} ({base_sha[:12]})"
+    return f"Git {base_ref} ({base_sha[:12]})"
+
+
+def repo_is_clean(root: pathlib.Path) -> bool:
+    result = run_cmd(["git", "status", "--porcelain"], cwd=root)
+    return not result.stdout.strip()
+
+
+def pid_alive(pid: int | None) -> bool:
+    if not pid:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def build_manifest(jobs: list[dict[str, Any]]) -> str:
+    lines = []
+    for job in jobs:
+        lines.append(f"- {job['id']}: {job['title']} (layer: {job['layer']})")
+    return "\n".join(lines)
+
+
+def build_worker_prompt(job: dict[str, Any], jobs: list[dict[str, Any]], run_state: dict[str, Any]) -> str:
+    other_jobs = [candidate for candidate in jobs if candidate["id"] != job["id"]]
+    other_manifest = "\n".join(
+        f"- {candidate['id']}: {candidate['title']}" for candidate in other_jobs
+    ) or "- none"
+    base_summary = format_base_summary(
+        str(run_state.get("base_ref") or "HEAD"),
+        str(run_state.get("base_sha") or ""),
+        run_state.get("base") or {},
+    )
+    base_meta = run_state.get("base") or {}
+    base_note = (
+        "This base was snapshotted from jj @ before the run. Treat that as the "
+        "user's latest state; do not assume plain Git HEAD contains all current work."
+        if base_meta.get("vcs") == "jj"
+        else "This base was resolved from Git before the run."
+    )
+
+    return textwrap.dedent(
+        f"""
+        You are one Codex worker in a parallel coding batch.
+
+        Batch id: {run_state['run_id']}
+        Assigned job id: {job['id']}
+        Assigned job title: {job['title']}
+        Base state: {base_summary}
+
+        You are running inside an isolated Git worktree created from the same base
+        revision as the other workers. Other workers' changes are not present in
+        this checkout.
+        {base_note}
+
+        Coordination rules:
+        - Implement only the assigned job.
+        - Do not implement the other active jobs listed below.
+        - If overlap is unavoidable, make the smallest compatible change and call it
+          out as a merge risk in your final response.
+        - Prefer localized edits over broad refactors.
+        - Do not commit.
+        - Do not edit .codex-fleet artifacts.
+        - Run relevant tests or checks when they are obvious and reasonably scoped.
+
+        Other active jobs in this batch:
+        {other_manifest}
+
+        Assigned job prompt:
+        ---
+        {job['body'].strip()}
+        ---
+
+        Final response contract:
+        - Summarize what changed.
+        - List files changed.
+        - List tests/checks run and their result.
+        - List merge risks, especially files/functions that overlap with other jobs.
+        """
+    ).strip() + "\n"
+
+
+def effective_model(args: argparse.Namespace) -> str:
+    return args.model or DEFAULT_MODEL
+
+
+def effective_reasoning_effort(args: argparse.Namespace) -> str:
+    return args.reasoning_effort or DEFAULT_REASONING_EFFORT
+
+
+def add_model_args(cmd: list[str], model: str, reasoning_effort: str) -> None:
+    cmd.extend(["--model", model])
+    cmd.extend(["-c", f'model_reasoning_effort="{reasoning_effort}"'])
+
+
+def format_duration(seconds: float | int | None) -> str:
+    if seconds is None:
+        return "unknown"
+    total = max(0, int(round(float(seconds))))
+    minutes, seconds = divmod(total, 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours:
+        return f"{hours}h{minutes:02d}m"
+    if minutes:
+        return f"{minutes}m{seconds:02d}s"
+    return f"{seconds}s"
+
+
+async def read_stdin_lines() -> asyncio.Queue[str | None]:
+    queue: asyncio.Queue[str | None] = asyncio.Queue()
+    loop = asyncio.get_running_loop()
+
+    def reader() -> None:
+        for line in sys.stdin:
+            loop.call_soon_threadsafe(queue.put_nowait, line)
+        loop.call_soon_threadsafe(queue.put_nowait, None)
+
+    threading.Thread(target=reader, daemon=True).start()
+    return queue
+
+
+async def terminate_process(process: asyncio.subprocess.Process, timeout: float = 5.0) -> None:
+    if process.returncode is not None:
+        return
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+    except OSError:
+        process.terminate()
+    try:
+        await asyncio.wait_for(process.wait(), timeout=timeout)
+        return
+    except asyncio.TimeoutError:
+        pass
+
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        return
+    except OSError:
+        process.kill()
+    await process.wait()
+
+
+def build_reconciler_prompt(root: pathlib.Path, run_dir: pathlib.Path, run_state: dict[str, Any]) -> str:
+    succeeded = [
+        worker for worker in run_state["workers"].values() if worker.get("status") == "succeeded"
+    ]
+    failed = [
+        worker for worker in run_state["workers"].values() if worker.get("status") == "failed"
+    ]
+
+    worker_lines = []
+    for worker in succeeded:
+        files = ", ".join(worker.get("files_changed") or []) or "none"
+        worker_lines.append(
+            f"- {worker['job_id']}: {worker['title']} | files: {files} | "
+            f"worktree: {rel_to_repo(root, pathlib.Path(worker['worktree']))} | "
+            f"diff: {rel_to_repo(root, pathlib.Path(worker['diff_path']))} | "
+            f"status: {rel_to_repo(root, pathlib.Path(worker['worker_dir']) / 'git-status.txt')} | "
+            f"summary: {rel_to_repo(root, pathlib.Path(worker['last_message_path']))}"
+        )
+
+    failed_lines = []
+    for worker in failed:
+        failed_lines.append(
+            f"- {worker['job_id']}: {worker['title']} | exit {worker.get('exit_code')} | "
+            f"stderr: {rel_to_repo(root, pathlib.Path(worker['stderr_path']))}"
+        )
+
+    return textwrap.dedent(
+        f"""
+        You are the final reconciler for a parallel Codex worker batch.
+
+        Batch id: {run_state['run_id']}
+        Repo root: {root}
+        Base ref used by workers: {run_state['base_ref']}
+        Run artifacts directory: {rel_to_repo(root, run_dir)}
+
+        Your job:
+        - Read the successful worker summaries and diffs.
+        - Apply the successful workers' changes to this main checkout.
+        - Resolve overlap or naming conflicts deliberately.
+        - Preserve each successful job's intent unless it is incompatible with the repo.
+        - Do not commit.
+        - Do not edit .codex-fleet artifacts.
+        - Run obvious, reasonably scoped tests/checks after merging.
+
+        Successful worker artifacts:
+        {chr(10).join(worker_lines) if worker_lines else "- none"}
+
+        Failed worker artifacts:
+        {chr(10).join(failed_lines) if failed_lines else "- none"}
+
+        Batch manifest:
+        {build_manifest(list(run_state['jobs'].values()))}
+
+        Suggested workflow:
+        1. Inspect each successful worker's `last_message.md` and `diff.patch`.
+        2. Apply or manually reproduce the diffs in this checkout.
+        3. If two diffs overlap, choose the combined behavior that satisfies both
+           prompts and keep the code coherent.
+        4. Run relevant tests/checks if available.
+
+        Final response contract:
+        - Summarize merged changes.
+        - List files changed.
+        - List tests/checks run and their result.
+        - List any skipped worker jobs and why.
+        - List unresolved risks.
+        """
+    ).strip() + "\n"
+
+
+def files_from_status(status: str) -> list[str]:
+    files: list[str] = []
+    for line in status.splitlines():
+        if not line:
+            continue
+        path_text = line[3:] if len(line) > 3 else line
+        if " -> " in path_text:
+            path_text = path_text.split(" -> ", 1)[1]
+        path_text = path_text.strip()
+        if path_text:
+            files.append(path_text)
+    return sorted(set(files))
+
+
+def collect_diff(worktree: pathlib.Path, worker_dir: pathlib.Path) -> tuple[list[str], str, str]:
+    status = run_cmd(["git", "status", "--short"], cwd=worktree, check=False).stdout
+    diff = run_cmd(["git", "diff", "--binary"], cwd=worktree, check=False).stdout
+    untracked = run_cmd(
+        ["git", "ls-files", "--others", "--exclude-standard"],
+        cwd=worktree,
+        check=False,
+    ).stdout
+    (worker_dir / "git-status.txt").write_text(status)
+    (worker_dir / "untracked-files.txt").write_text(untracked)
+    if untracked.strip():
+        diff += (
+            "\n\n# NOTE: This worker created untracked files that are not represented "
+            "in git diff output.\n"
+            "# See untracked-files.txt and the worker worktree path in run.json.\n"
+        )
+    (worker_dir / "diff.patch").write_text(diff)
+    files = files_from_status(status)
+    return files, status, diff
+
+
+def applyable_diff_text(diff: str) -> str:
+    marker = "\n\n# NOTE: This worker created untracked files"
+    return diff.split(marker, 1)[0].strip() + ("\n" if diff.split(marker, 1)[0].strip() else "")
+
+
+def safe_repo_path(path_text: str) -> pathlib.PurePosixPath:
+    path_text = path_text.strip()
+    if not path_text:
+        raise FleetError("Empty path in worker output.")
+    path = pathlib.PurePosixPath(path_text)
+    if path.is_absolute() or ".." in path.parts:
+        raise FleetError(f"Unsafe worker path: {path_text}")
+    if path.parts and path.parts[0] in {".git", STATE_DIR}:
+        raise FleetError(f"Refusing to apply worker artifact path: {path_text}")
+    return path
+
+
+def copy_worker_file(worktree: pathlib.Path, root: pathlib.Path, rel_path: pathlib.PurePosixPath) -> None:
+    source = worktree.joinpath(*rel_path.parts)
+    destination = root.joinpath(*rel_path.parts)
+    if not source.is_file():
+        raise FleetError(f"Worker artifact is not a file: {rel_path}")
+    if destination.exists():
+        if destination.is_file() and source.read_bytes() == destination.read_bytes():
+            return
+        raise FleetError(f"Refusing to overwrite existing checkout file: {rel_path}")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source, destination)
+
+
+def apply_single_worker_to_checkout(root: pathlib.Path, worker: dict[str, Any]) -> dict[str, Any]:
+    worker_dir = pathlib.Path(worker["worker_dir"])
+    worktree = pathlib.Path(worker["worktree"])
+    diff_path = pathlib.Path(worker["diff_path"])
+    diff = diff_path.read_text(errors="replace") if diff_path.exists() else ""
+    patch_text = applyable_diff_text(diff)
+
+    applied_patch = False
+    copied_files: list[str] = []
+    if patch_text:
+        patch_path = worker_dir / "direct-apply.patch"
+        patch_path.write_text(patch_text)
+        result = run_cmd(
+            ["git", "apply", "--3way", "--binary", str(patch_path)],
+            cwd=root,
+            check=False,
+        )
+        (worker_dir / "direct-apply.stdout").write_text(result.stdout)
+        (worker_dir / "direct-apply.stderr").write_text(result.stderr)
+        if result.returncode != 0:
+            raise FleetError(
+                f"Single-worker patch apply failed for {worker.get('job_id')}.\n"
+                f"{result.stderr.strip()}"
+            )
+        applied_patch = True
+
+    untracked_path = worker_dir / "untracked-files.txt"
+    if untracked_path.exists():
+        for raw_path in untracked_path.read_text(errors="replace").splitlines():
+            if not raw_path.strip():
+                continue
+            rel_path = safe_repo_path(raw_path)
+            copy_worker_file(worktree, root, rel_path)
+            copied_files.append(str(rel_path))
+
+    final_status = run_cmd(["git", "status", "--short"], cwd=root, check=False).stdout
+    final_stat = run_cmd(["git", "diff", "--stat"], cwd=root, check=False).stdout
+    direct_dir = worker_dir / "direct-apply"
+    direct_dir.mkdir(exist_ok=True)
+    (direct_dir / "final-git-status.txt").write_text(final_status)
+    (direct_dir / "final-diff-stat.txt").write_text(final_stat)
+    return {
+        "status": "succeeded",
+        "worker_id": worker.get("job_id"),
+        "applied_patch": applied_patch,
+        "copied_files": copied_files,
+        "completed_at": now_iso(),
+        "final_git_status_path": str(direct_dir / "final-git-status.txt"),
+        "final_diff_stat_path": str(direct_dir / "final-diff-stat.txt"),
+    }
+
+
+def worker_base_state(job: dict[str, Any], worker_dir: pathlib.Path, worktree: pathlib.Path) -> dict[str, Any]:
+    return {
+        "job_id": job["id"],
+        "title": job["title"],
+        "layer": job["layer"],
+        "status": "queued",
+        "pid": None,
+        "exit_code": None,
+        "started_at": None,
+        "completed_at": None,
+        "duration_seconds": None,
+        "worktree": str(worktree),
+        "worker_dir": str(worker_dir),
+        "prompt_path": str(worker_dir / "prompt.md"),
+        "stdout_path": str(worker_dir / "stdout.jsonl"),
+        "stderr_path": str(worker_dir / "stderr.log"),
+        "last_message_path": str(worker_dir / "last_message.md"),
+        "diff_path": str(worker_dir / "diff.patch"),
+        "files_changed": [],
+    }
+
+
+class RunContext:
+    def __init__(self, root: pathlib.Path, state: pathlib.Path, run_dir: pathlib.Path, run_state: dict[str, Any]):
+        self.root = root
+        self.state = state
+        self.run_dir = run_dir
+        self.run_state = run_state
+        self.events_path = run_dir / "events.jsonl"
+        self.run_json_path = run_dir / "run.json"
+
+    def save(self) -> None:
+        write_json(self.run_json_path, self.run_state)
+
+    def event(self, event: str, **data: Any) -> None:
+        append_jsonl(self.events_path, {"ts": now_iso(), "event": event, **data})
+
+
+async def run_worker(
+    context: RunContext,
+    job: dict[str, Any],
+    worker: dict[str, Any],
+    model: str,
+    reasoning_effort: str,
+    danger: bool,
+    search: bool,
+) -> None:
+    root = context.root
+    worktree = pathlib.Path(worker["worktree"])
+    worker_dir = pathlib.Path(worker["worker_dir"])
+    worker_dir.mkdir(parents=True, exist_ok=True)
+
+    worker["status"] = "preparing"
+    context.save()
+    context.event("worker_prepare", job_id=job["id"], worktree=str(worktree))
+
+    add_result = run_cmd(
+        ["git", "worktree", "add", "--detach", str(worktree), context.run_state["base_ref"]],
+        cwd=root,
+        check=False,
+    )
+    (worker_dir / "worktree-add.stdout").write_text(add_result.stdout)
+    (worker_dir / "worktree-add.stderr").write_text(add_result.stderr)
+    if add_result.returncode != 0:
+        worker.update(
+            {
+                "status": "failed",
+                "exit_code": add_result.returncode,
+                "completed_at": now_iso(),
+                "error": "git worktree add failed",
+            }
+        )
+        context.event("worker_failed", job_id=job["id"], reason="worktree_add_failed")
+        context.save()
+        return
+
+    prompt = build_worker_prompt(job, list(context.run_state["jobs"].values()), context.run_state)
+    pathlib.Path(worker["prompt_path"]).write_text(prompt)
+
+    cmd = ["codex"]
+    if search:
+        cmd.append("--search")
+    cmd.extend(["exec", "--cd", str(worktree), "--json", "-o", worker["last_message_path"]])
+    add_model_args(cmd, model, reasoning_effort)
+    if danger:
+        cmd.append("--dangerously-bypass-approvals-and-sandbox")
+    else:
+        cmd.extend(["--ask-for-approval", "never", "--sandbox", "workspace-write"])
+    cmd.append("-")
+
+    worker["status"] = "running"
+    worker["started_at"] = now_iso()
+    worker["command"] = cmd
+    context.save()
+    context.event("worker_start", job_id=job["id"], command=cmd)
+
+    start = time.monotonic()
+    process: asyncio.subprocess.Process | None = None
+    try:
+        with pathlib.Path(worker["stdout_path"]).open("wb") as stdout_file, pathlib.Path(
+            worker["stderr_path"]
+        ).open("wb") as stderr_file:
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=stdout_file,
+                stderr=stderr_file,
+                start_new_session=True,
+            )
+            worker["pid"] = process.pid
+            context.save()
+            await process.communicate(prompt.encode())
+    except asyncio.CancelledError:
+        if process:
+            await terminate_process(process)
+        worker["status"] = "canceled"
+        worker["exit_code"] = process.returncode if process else None
+        worker["completed_at"] = now_iso()
+        worker["duration_seconds"] = round(time.monotonic() - start, 2)
+        worker["pid_alive"] = False
+        context.event(
+            "worker_canceled",
+            job_id=job["id"],
+            duration_seconds=worker["duration_seconds"],
+        )
+        context.save()
+        raise
+
+    duration = time.monotonic() - start
+    worker["exit_code"] = process.returncode
+    worker["completed_at"] = now_iso()
+    worker["duration_seconds"] = round(duration, 2)
+    worker["pid_alive"] = False
+
+    files, status, diff = collect_diff(worktree, worker_dir)
+    worker["files_changed"] = files
+    worker["git_status"] = status
+    worker["diff_bytes"] = len(diff.encode())
+
+    if process.returncode == 0:
+        worker["status"] = "succeeded"
+        context.event(
+            "worker_succeeded",
+            job_id=job["id"],
+            duration_seconds=worker["duration_seconds"],
+            files_changed=files,
+        )
+    else:
+        worker["status"] = "failed"
+        context.event(
+            "worker_failed",
+            job_id=job["id"],
+            exit_code=process.returncode,
+            duration_seconds=worker["duration_seconds"],
+        )
+    context.save()
+
+
+async def run_reconciler(
+    context: RunContext,
+    model: str,
+    reasoning_effort: str,
+    danger: bool,
+    search: bool,
+) -> None:
+    root = context.root
+    run_dir = context.run_dir
+    reconciler_dir = run_dir / "reconciler"
+    reconciler_dir.mkdir(parents=True, exist_ok=True)
+
+    prompt = build_reconciler_prompt(root, run_dir, context.run_state)
+    prompt_path = reconciler_dir / "prompt.md"
+    stdout_path = reconciler_dir / "stdout.jsonl"
+    stderr_path = reconciler_dir / "stderr.log"
+    last_message_path = reconciler_dir / "last_message.md"
+    prompt_path.write_text(prompt)
+
+    cmd = ["codex"]
+    if search:
+        cmd.append("--search")
+    cmd.extend(["exec", "--cd", str(root), "--json", "-o", str(last_message_path)])
+    add_model_args(cmd, model, reasoning_effort)
+    if danger:
+        cmd.append("--dangerously-bypass-approvals-and-sandbox")
+    else:
+        cmd.extend(["--ask-for-approval", "never", "--sandbox", "workspace-write"])
+    cmd.append("-")
+
+    reconciler = {
+        "status": "running",
+        "pid": None,
+        "started_at": now_iso(),
+        "completed_at": None,
+        "duration_seconds": None,
+        "exit_code": None,
+        "prompt_path": str(prompt_path),
+        "stdout_path": str(stdout_path),
+        "stderr_path": str(stderr_path),
+        "last_message_path": str(last_message_path),
+        "command": cmd,
+    }
+    context.run_state["reconciler"] = reconciler
+    context.run_state["phase"] = "reconciling"
+    context.save()
+    context.event("reconciler_start", command=cmd)
+
+    start = time.monotonic()
+    with stdout_path.open("wb") as stdout_file, stderr_path.open("wb") as stderr_file:
+        process = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=stdout_file,
+            stderr=stderr_file,
+            start_new_session=True,
+        )
+        reconciler["pid"] = process.pid
+        context.save()
+        await process.communicate(prompt.encode())
+
+    duration = time.monotonic() - start
+    reconciler["exit_code"] = process.returncode
+    reconciler["completed_at"] = now_iso()
+    reconciler["duration_seconds"] = round(duration, 2)
+    reconciler["pid_alive"] = False
+
+    final_status = run_cmd(["git", "status", "--short"], cwd=root, check=False).stdout
+    final_stat = run_cmd(["git", "diff", "--stat"], cwd=root, check=False).stdout
+    (reconciler_dir / "final-git-status.txt").write_text(final_status)
+    (reconciler_dir / "final-diff-stat.txt").write_text(final_stat)
+    reconciler["final_git_status_path"] = str(reconciler_dir / "final-git-status.txt")
+    reconciler["final_diff_stat_path"] = str(reconciler_dir / "final-diff-stat.txt")
+
+    if process.returncode == 0:
+        reconciler["status"] = "succeeded"
+        context.run_state["phase"] = "completed"
+        context.event("reconciler_succeeded", duration_seconds=reconciler["duration_seconds"])
+    else:
+        reconciler["status"] = "failed"
+        context.run_state["phase"] = "reconciler_failed"
+        context.event(
+            "reconciler_failed",
+            exit_code=process.returncode,
+            duration_seconds=reconciler["duration_seconds"],
+        )
+    context.save()
+
+
+async def run_batch(args: argparse.Namespace) -> int:
+    root = git_root()
+    state = ensure_state(root)
+    model = effective_model(args)
+    reasoning_effort = effective_reasoning_effort(args)
+
+    if not shutil.which("codex"):
+        raise FleetError("Could not find `codex` on PATH.")
+
+    jobs_paths = queue_files(state)
+    if not jobs_paths:
+        print("No queued jobs. Add prompts with `codex-fleet add` or `codex-fleet capture`.")
+        return 0
+
+    if not args.allow_dirty and not repo_is_clean(root):
+        raise FleetError(
+            "The repo has uncommitted changes. Commit/stash them first, or use --allow-dirty "
+            "if you intentionally want the reconciler to edit a dirty checkout."
+        )
+
+    jobs = [job_from_file(path) for path in jobs_paths]
+    run_id = f"{compact_time()}-{random.randrange(1000, 9999)}"
+    run_dir = state / RUNS_DIR / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (state / RUNS_DIR / "latest").write_text(run_id + "\n")
+
+    base_ref, base_sha, base_meta = resolve_base_ref(root, args.base)
+
+    run_state: dict[str, Any] = {
+        "run_id": run_id,
+        "repo_root": str(root),
+        "branch": current_branch(root),
+        "base_ref": base_ref,
+        "base_sha": base_sha,
+        "base": base_meta,
+        "started_at": now_iso(),
+        "completed_at": None,
+        "phase": "dispatching",
+        "concurrency": args.jobs,
+        "model": model,
+        "reasoning_effort": reasoning_effort,
+        "jobs": {},
+        "workers": {},
+        "reconciler": None,
+    }
+
+    context = RunContext(root, state, run_dir, run_state)
+    context.save()
+    context.event(
+        "run_created",
+        run_id=run_id,
+        job_count=len(jobs),
+        base_ref=base_ref,
+        base_sha=base_sha,
+        **base_meta,
+    )
+
+    claimed_jobs_dir = run_dir / "jobs"
+    archive_dir = state / ARCHIVE_DIR / run_id
+    claimed_jobs_dir.mkdir(parents=True, exist_ok=True)
+    archive_dir.mkdir(parents=True, exist_ok=True)
+
+    for path, job in zip(jobs_paths, jobs):
+        claimed_path = claimed_jobs_dir / path.name
+        archived_path = archive_dir / path.name
+        text = path.read_text(errors="replace")
+        claimed_path.write_text(text)
+        archived_path.write_text(text)
+        path.unlink()
+        job["path"] = str(claimed_path)
+        run_state["jobs"][job["id"]] = {
+            "id": job["id"],
+            "title": job["title"],
+            "layer": job["layer"],
+            "path": str(claimed_path),
+            "body": job["body"],
+        }
+
+        worker_dir = run_dir / "workers" / job["id"]
+        worktree = state / WORKTREES_DIR / run_id / job["id"]
+        run_state["workers"][job["id"]] = worker_base_state(job, worker_dir, worktree)
+
+    context.save()
+
+    print(f"Run {run_id}: dispatching {len(jobs)} job(s) with concurrency {args.jobs}.")
+    print(f"Base: {format_base_summary(base_ref, base_sha, base_meta)}")
+    print(f"Telemetry: {rel_to_repo(root, run_dir)}")
+
+    semaphore = asyncio.Semaphore(args.jobs)
+
+    async def bounded(job: dict[str, Any]) -> None:
+        async with semaphore:
+            await run_worker(
+                context,
+                job,
+                context.run_state["workers"][job["id"]],
+                model=model,
+                reasoning_effort=reasoning_effort,
+                danger=args.danger,
+                search=args.search,
+            )
+            worker = context.run_state["workers"][job["id"]]
+            print_live(
+                f"worker {job['id']} {worker.get('status')} "
+                f"in {format_duration(worker.get('duration_seconds'))} "
+                f"({len(worker.get('files_changed') or [])} files)"
+            )
+
+    context.run_state["phase"] = "workers_running"
+    context.save()
+    await asyncio.gather(*(bounded(job) for job in jobs))
+
+    succeeded = [
+        worker for worker in context.run_state["workers"].values() if worker["status"] == "succeeded"
+    ]
+    failed = [
+        worker for worker in context.run_state["workers"].values() if worker["status"] == "failed"
+    ]
+    context.event("workers_completed", succeeded=len(succeeded), failed=len(failed))
+
+    if args.no_reconcile:
+        context.run_state["phase"] = "workers_completed"
+        context.run_state["completed_at"] = now_iso()
+        context.save()
+        print(f"Workers done: {len(succeeded)} succeeded, {len(failed)} failed. Reconciler skipped.")
+        return 0 if not failed else 1
+
+    if not succeeded:
+        context.run_state["phase"] = "no_successful_workers"
+        context.run_state["completed_at"] = now_iso()
+        context.save()
+        print("No workers succeeded; reconciler skipped.")
+        return 1
+
+    if len(context.run_state["workers"]) == 1 and len(succeeded) == 1:
+        try:
+            direct_apply = apply_single_worker_to_checkout(root, succeeded[0])
+        except FleetError as exc:
+            context.run_state["phase"] = "direct_apply_failed"
+            context.run_state["completed_at"] = now_iso()
+            context.run_state["direct_apply"] = {
+                "status": "failed",
+                "worker_id": succeeded[0].get("job_id"),
+                "error": str(exc),
+                "completed_at": now_iso(),
+            }
+            context.save()
+            context.event("single_worker_direct_apply_failed", error=str(exc))
+            print(f"Single worker finished, but direct apply failed: {exc}")
+            return 1
+
+        context.run_state["phase"] = "completed"
+        context.run_state["completed_at"] = now_iso()
+        context.run_state["direct_apply"] = direct_apply
+        context.save()
+        context.event("single_worker_direct_applied", **direct_apply)
+        print(
+            "Run finished: 1 worker succeeded; reconciler skipped; "
+            "changes applied directly."
+        )
+        print(f"Check health: codex-fleet health --run {run_id}")
+        return 0
+
+    await run_reconciler(
+        context,
+        model=model,
+        reasoning_effort=reasoning_effort,
+        danger=args.danger,
+        search=args.search,
+    )
+    context.run_state["completed_at"] = now_iso()
+    context.save()
+
+    reconciler = context.run_state["reconciler"] or {}
+    print(
+        "Run finished: "
+        f"{len(succeeded)} worker(s) succeeded, {len(failed)} failed, "
+        f"reconciler {reconciler.get('status')}."
+    )
+    print(f"Check health: codex-fleet health --run {run_id}")
+    return 0 if reconciler.get("status") == "succeeded" and not failed else 1
+
+
+async def run_live(args: argparse.Namespace) -> int:
+    root = git_root()
+    state = ensure_state(root)
+    model = effective_model(args)
+    reasoning_effort = effective_reasoning_effort(args)
+
+    if not shutil.which("codex"):
+        raise FleetError("Could not find `codex` on PATH.")
+
+    if not args.allow_dirty and not repo_is_clean(root):
+        raise FleetError(
+            "The repo has uncommitted changes. Re-run with --allow-dirty if you "
+            "intentionally want the reconciler to edit a dirty checkout."
+        )
+    if args.flush_queue:
+        removed = flush_queue(state)
+        if removed:
+            print_live(f"Flushed {removed} stale queued prompt(s).")
+
+    run_id = f"{compact_time()}-{random.randrange(1000, 9999)}"
+    run_dir = state / RUNS_DIR / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (state / RUNS_DIR / "latest").write_text(run_id + "\n")
+
+    base_ref, base_sha, base_meta = resolve_base_ref(root, args.base)
+    run_state: dict[str, Any] = {
+        "run_id": run_id,
+        "repo_root": str(root),
+        "branch": current_branch(root),
+        "base_ref": base_ref,
+        "base_sha": base_sha,
+        "base": base_meta,
+        "started_at": now_iso(),
+        "completed_at": None,
+        "phase": "input_open",
+        "concurrency": args.jobs,
+        "model": model,
+        "reasoning_effort": reasoning_effort,
+        "jobs": {},
+        "workers": {},
+        "reconciler": None,
+        "mode": "live",
+    }
+
+    context = RunContext(root, state, run_dir, run_state)
+    context.save()
+    context.event("live_run_created", run_id=run_id, base_ref=base_ref, base_sha=base_sha, **base_meta)
+
+    claimed_jobs_dir = run_dir / "jobs"
+    archive_dir = state / ARCHIVE_DIR / run_id
+    claimed_jobs_dir.mkdir(parents=True, exist_ok=True)
+    archive_dir.mkdir(parents=True, exist_ok=True)
+
+    semaphore = asyncio.Semaphore(args.jobs)
+    tasks: list[asyncio.Task[None]] = []
+
+    async def bounded(job: dict[str, Any]) -> None:
+        async with semaphore:
+            await run_worker(
+                context,
+                job,
+                context.run_state["workers"][job["id"]],
+                model=model,
+                reasoning_effort=reasoning_effort,
+                danger=args.danger,
+                search=args.search,
+            )
+            worker = context.run_state["workers"][job["id"]]
+            print_live(
+                f"worker {job['id']} {worker.get('status')} "
+                f"in {format_duration(worker.get('duration_seconds'))} "
+                f"({len(worker.get('files_changed') or [])} files)"
+            )
+
+    async def submit_prompt(body: str, layer: str = "default", title: str | None = None) -> None:
+        body = body.strip()
+        if not body:
+            return
+        inferred_title = title or first_heading_or_line(body, "job")
+        job_id = f"{compact_time()}-{random.randrange(100000, 999999)}-{slugify(inferred_title)}"
+        path = claimed_jobs_dir / f"{job_id}.md"
+        archive_path = archive_dir / f"{job_id}.md"
+        content = job_file_content(job_id, body, inferred_title, layer)
+        path.write_text(content)
+        archive_path.write_text(content)
+
+        job = {
+            "id": job_id,
+            "title": inferred_title,
+            "layer": layer,
+            "path": str(path),
+            "body": body,
+            "meta": {},
+        }
+        context.run_state["jobs"][job_id] = {
+            "id": job_id,
+            "title": inferred_title,
+            "layer": layer,
+            "path": str(path),
+            "body": body,
+        }
+
+        worker_dir = run_dir / "workers" / job_id
+        worktree = state / WORKTREES_DIR / run_id / job_id
+        context.run_state["workers"][job_id] = worker_base_state(job, worker_dir, worktree)
+        context.run_state["phase"] = "workers_running"
+        context.save()
+        context.event("live_job_received", job_id=job_id, title=inferred_title)
+        print_live(f"queued {job_id}: {inferred_title}")
+        tasks.append(asyncio.create_task(bounded(job)))
+
+    async def cancel_live(reason: str) -> int:
+        context.event("live_cancel_requested", reason=reason)
+        print_live("cancel requested; terminating workers and cleaning worktrees")
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        for worker in context.run_state["workers"].values():
+            if worker.get("status") in {"queued", "preparing", "running"}:
+                worker["status"] = "canceled"
+                worker["completed_at"] = now_iso()
+                worker["pid_alive"] = False
+        removed = remove_run_worktrees(root, state, run_id)
+        context.run_state["phase"] = "canceled"
+        context.run_state["completed_at"] = now_iso()
+        context.run_state["cleanup"] = {"worktrees_removed": removed}
+        context.save()
+        context.event("live_canceled", reason=reason, worktrees_removed=removed)
+        print_live(f"Canceled run {run_id}; removed {removed} worktree(s).")
+        return 130
+
+    print_live(f"Live run {run_id}: ready for prompts with concurrency {args.jobs}.")
+    print_live(f"Model: {model} ({reasoning_effort})")
+    print_live(f"Base: {format_base_summary(base_ref, base_sha, base_meta)}")
+    print_live(f"Telemetry: {rel_to_repo(root, run_dir)}")
+    if args.allow_dirty:
+        print_live("Warning: --allow-dirty is enabled; reconciler will edit the current checkout.")
+
+    stdin_lines = await read_stdin_lines()
+    auto_finish_started_at: float | None = None
+
+    while True:
+        try:
+            raw_line = await asyncio.wait_for(stdin_lines.get(), timeout=0.5)
+        except asyncio.TimeoutError:
+            raw_line = "__codex_fleet_timeout__"
+
+        if raw_line is None:
+            return await cancel_live("stdin_closed")
+
+        if raw_line != "__codex_fleet_timeout__":
+            line = raw_line.strip()
+            if not line:
+                continue
+            auto_finish_started_at = None
+            try:
+                message = json.loads(line)
+            except json.JSONDecodeError:
+                await submit_prompt(line)
+                continue
+
+            command = message.get("command")
+            if command == "cancel":
+                return await cancel_live("frontend_cancel")
+            if command == "finish":
+                context.event("live_input_finished")
+                print_live("input finished; waiting for workers")
+                break
+            if command == "prompt":
+                await submit_prompt(
+                    str(message.get("prompt") or ""),
+                    layer=str(message.get("layer") or "default"),
+                    title=message.get("title"),
+                )
+                continue
+            print_live(f"ignored unknown live message: {line[:120]}")
+
+        if (
+            args.auto_reconcile_when_idle
+            and tasks
+            and all(task.done() for task in tasks)
+        ):
+            if auto_finish_started_at is None:
+                auto_finish_started_at = time.monotonic()
+                context.event("live_auto_finish_armed")
+                print_live(
+                    "submitted jobs finished; auto-reconciling "
+                    f"in {format_duration(args.auto_reconcile_delay)}"
+                )
+            elif time.monotonic() - auto_finish_started_at >= args.auto_reconcile_delay:
+                context.event("live_auto_finished")
+                print_live("submitted queue is done; starting reconciler")
+                break
+
+    if tasks:
+        await asyncio.gather(*tasks)
+
+    succeeded = [
+        worker for worker in context.run_state["workers"].values() if worker["status"] == "succeeded"
+    ]
+    failed = [
+        worker for worker in context.run_state["workers"].values() if worker["status"] == "failed"
+    ]
+    context.event("workers_completed", succeeded=len(succeeded), failed=len(failed))
+
+    if args.no_reconcile:
+        context.run_state["phase"] = "workers_completed"
+        context.run_state["completed_at"] = now_iso()
+        context.save()
+        print_live(f"Workers done: {len(succeeded)} succeeded, {len(failed)} failed. Reconciler skipped.")
+        return 0 if not failed else 1
+
+    if not context.run_state["workers"]:
+        context.run_state["phase"] = "completed"
+        context.run_state["completed_at"] = now_iso()
+        context.save()
+        print_live("No jobs were submitted.")
+        return 0
+
+    if not succeeded:
+        context.run_state["phase"] = "no_successful_workers"
+        context.run_state["completed_at"] = now_iso()
+        context.save()
+        print_live("No workers succeeded; reconciler skipped.")
+        return 1
+
+    if len(context.run_state["workers"]) == 1 and len(succeeded) == 1:
+        try:
+            direct_apply = apply_single_worker_to_checkout(root, succeeded[0])
+        except FleetError as exc:
+            context.run_state["phase"] = "direct_apply_failed"
+            context.run_state["completed_at"] = now_iso()
+            context.run_state["direct_apply"] = {
+                "status": "failed",
+                "worker_id": succeeded[0].get("job_id"),
+                "error": str(exc),
+                "completed_at": now_iso(),
+            }
+            context.save()
+            context.event("single_worker_direct_apply_failed", error=str(exc))
+            print_live(f"Single worker finished, but direct apply failed: {exc}")
+            return 1
+
+        context.run_state["phase"] = "completed"
+        context.run_state["completed_at"] = now_iso()
+        context.run_state["direct_apply"] = direct_apply
+        context.save()
+        context.event("single_worker_direct_applied", **direct_apply)
+        print_live("single worker finished; reconciler skipped; changes applied directly")
+        print_live(f"Check health: codex-fleet health --run {run_id}")
+        return 0
+
+    print_live("workers finished; starting reconciler")
+    await run_reconciler(
+        context,
+        model=model,
+        reasoning_effort=reasoning_effort,
+        danger=args.danger,
+        search=args.search,
+    )
+    reconciler = context.run_state["reconciler"] or {}
+    print_live(
+        f"reconciler {reconciler.get('status')} "
+        f"in {format_duration(reconciler.get('duration_seconds'))}"
+    )
+    context.run_state["completed_at"] = now_iso()
+    context.save()
+
+    print_live(
+        "Live run finished: "
+        f"{len(succeeded)} worker(s) succeeded, {len(failed)} failed, "
+        f"reconciler {reconciler.get('status')}."
+    )
+    print_live(f"Check health: codex-fleet health --run {run_id}")
+    return 0 if reconciler.get("status") == "succeeded" and not failed else 1
+
+
+async def run_reconcile_existing(args: argparse.Namespace) -> int:
+    root = git_root()
+    state = ensure_state(root)
+    run_id = args.run or latest_run_id(state)
+    if not run_id:
+        raise FleetError("No run found to reconcile.")
+
+    run_dir = state / RUNS_DIR / run_id
+    run_json = run_dir / "run.json"
+    if not run_json.exists():
+        raise FleetError(f"Run state not found: {run_json}")
+
+    run_state = json.loads(run_json.read_text())
+    workers = run_state.get("workers", {})
+    succeeded = [
+        worker for worker in workers.values()
+        if worker.get("status") == "succeeded"
+    ]
+    running = [
+        worker for worker in workers.values()
+        if worker.get("status") in {"queued", "preparing", "running"}
+    ]
+    if running and not args.force:
+        raise FleetError(
+            f"{len(running)} worker(s) are still running. Use --force to reconcile anyway."
+        )
+    if not succeeded:
+        raise FleetError("No successful workers to reconcile.")
+
+    existing = run_state.get("reconciler")
+    if existing and existing.get("status") == "succeeded" and not args.force:
+        print(f"Run {run_id} is already reconciled.")
+        return 0
+
+    model = args.model or run_state.get("model") or DEFAULT_MODEL
+    reasoning_effort = (
+        args.reasoning_effort
+        or run_state.get("reasoning_effort")
+        or DEFAULT_REASONING_EFFORT
+    )
+    context = RunContext(root, state, run_dir, run_state)
+    print(f"Reconciling run {run_id} with {len(succeeded)} successful worker(s).")
+    await run_reconciler(
+        context,
+        model=model,
+        reasoning_effort=reasoning_effort,
+        danger=args.danger,
+        search=args.search,
+    )
+    reconciler = context.run_state["reconciler"] or {}
+    context.run_state["completed_at"] = now_iso()
+    context.save()
+    print(
+        f"Reconciler {reconciler.get('status')} "
+        f"in {format_duration(reconciler.get('duration_seconds'))}."
+    )
+    return 0 if reconciler.get("status") == "succeeded" else 1
+
+
+def command_add(args: argparse.Namespace) -> int:
+    root = git_root()
+    state = ensure_state(root)
+
+    if args.prompt:
+        body = " ".join(args.prompt)
+    else:
+        if sys.stdin.isatty():
+            print("Enter one prompt. Finish with Ctrl-D.")
+        body = sys.stdin.read()
+
+    path = create_job(state, body, args.title, args.layer)
+    print(f"Queued {path.name}")
+    return 0
+
+
+def command_capture(args: argparse.Namespace) -> int:
+    root = git_root()
+    state = ensure_state(root)
+
+    if sys.stdin.isatty():
+        chunks = capture_interactive(args.separator)
+    else:
+        text = sys.stdin.read()
+        chunks = split_capture(text, args.separator)
+    if not chunks:
+        raise FleetError("No prompts captured.")
+
+    paths = []
+    for index, chunk in enumerate(chunks, start=1):
+        title = None
+        if args.title_prefix:
+            title = f"{args.title_prefix} {index}"
+        paths.append(create_job(state, chunk, title, args.layer))
+
+    print(f"Queued {len(paths)} job(s):")
+    for path in paths:
+        print(f"- {path.name}")
+
+    if args.run:
+        run_args = argparse.Namespace(
+            jobs=args.jobs,
+            base=args.base,
+            allow_dirty=args.allow_dirty,
+            no_reconcile=args.no_reconcile,
+            model=args.model,
+            reasoning_effort=args.reasoning_effort,
+            danger=args.danger,
+            search=args.search,
+        )
+        return asyncio.run(run_batch(run_args))
+    return 0
+
+
+def command_list(args: argparse.Namespace) -> int:
+    root = git_root()
+    state = ensure_state(root)
+    files = queue_files(state)
+    if not files:
+        print("Queue is empty.")
+        return 0
+    print(f"Queued jobs in {rel_to_repo(root, state / QUEUE_DIR)}:")
+    for path in files:
+        job = job_from_file(path)
+        print(f"- {path.name}: {job['title']} [layer: {job['layer']}]")
+    return 0
+
+
+def status_counts(workers: dict[str, Any]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for worker in workers.values():
+        status = worker.get("status", "unknown")
+        counts[status] = counts.get(status, 0) + 1
+    return counts
+
+
+def command_health(args: argparse.Namespace) -> int:
+    root = git_root()
+    state = ensure_state(root)
+    run_id = args.run or latest_run_id(state)
+    queue_count = len(queue_files(state))
+
+    if not run_id:
+        print(f"No runs found. Queue: {queue_count} pending job(s).")
+        return 0
+
+    run_dir = state / RUNS_DIR / run_id
+    run_json = run_dir / "run.json"
+    if not run_json.exists():
+        raise FleetError(f"Run state not found: {run_json}")
+
+    data = json.loads(run_json.read_text())
+    workers = data.get("workers", {})
+    counts = status_counts(workers)
+    print(f"Run: {run_id}")
+    print(f"Repo: {data.get('repo_root')}")
+    print(f"Branch: {data.get('branch')}  Base: {data.get('base_ref')} ({data.get('base_sha', '')[:12]})")
+    base_meta = data.get("base") or {}
+    if base_meta:
+        base_source = base_meta.get("base_source") or "unknown"
+        vcs = base_meta.get("vcs") or "unknown"
+        jj_change = base_meta.get("jj_change_id")
+        jj_text = f" | jj change: {jj_change}" if jj_change else ""
+        print(f"Base source: {vcs}/{base_source}{jj_text}")
+    print(f"Model: {data.get('model', DEFAULT_MODEL)}  Reasoning: {data.get('reasoning_effort', DEFAULT_REASONING_EFFORT)}")
+    print(f"Phase: {data.get('phase')}  Started: {data.get('started_at')}  Completed: {data.get('completed_at')}")
+    print(f"Queue: {queue_count} pending job(s)")
+    print("Workers: " + ", ".join(f"{key}={value}" for key, value in sorted(counts.items())))
+
+    for worker in workers.values():
+        pid = worker.get("pid")
+        alive = pid_alive(pid)
+        if worker.get("status") == "running":
+            worker["pid_alive"] = alive
+        files = ", ".join(worker.get("files_changed") or [])
+        files_text = f" | files: {files}" if files else ""
+        pid_text = f" | pid: {pid} alive={alive}" if pid else ""
+        print(
+            f"- {worker.get('job_id')}: {worker.get('status')}"
+            f" | exit: {worker.get('exit_code')}"
+            f" | {worker.get('duration_seconds')}s"
+            f"{pid_text}{files_text}"
+        )
+
+    reconciler = data.get("reconciler")
+    if reconciler:
+        pid = reconciler.get("pid")
+        alive = pid_alive(pid)
+        print(
+            f"Reconciler: {reconciler.get('status')} | exit: {reconciler.get('exit_code')} "
+            f"| {reconciler.get('duration_seconds')}s"
+            + (f" | pid: {pid} alive={alive}" if pid else "")
+        )
+    else:
+        print("Reconciler: not started")
+
+    direct_apply = data.get("direct_apply")
+    if direct_apply:
+        copied = ", ".join(direct_apply.get("copied_files") or [])
+        copied_text = f" | copied: {copied}" if copied else ""
+        print(
+            f"Direct apply: {direct_apply.get('status')} "
+            f"| worker: {direct_apply.get('worker_id')}"
+            f"{copied_text}"
+        )
+
+    print(f"Events: {rel_to_repo(root, run_dir / 'events.jsonl')}")
+    print(f"Run JSON: {rel_to_repo(root, run_json)}")
+    return 0
+
+
+def command_runs(args: argparse.Namespace) -> int:
+    root = git_root()
+    state = ensure_state(root)
+    run_root = state / RUNS_DIR
+    runs = sorted(p for p in run_root.iterdir() if p.is_dir())
+    if not runs:
+        print("No runs found.")
+        return 0
+    for run_dir in runs[-args.limit :]:
+        run_json = run_dir / "run.json"
+        if run_json.exists():
+            data = json.loads(run_json.read_text())
+            workers = data.get("workers", {})
+            counts = status_counts(workers)
+            counts_text = ", ".join(f"{key}={value}" for key, value in sorted(counts.items()))
+            print(
+                f"{run_dir.name} | {data.get('phase')} | {data.get('started_at')} | "
+                f"{counts_text}"
+            )
+        else:
+            print(f"{run_dir.name} | missing run.json")
+    return 0
+
+
+def command_logs(args: argparse.Namespace) -> int:
+    root = git_root()
+    state = ensure_state(root)
+    run_id = args.run or latest_run_id(state)
+    if not run_id:
+        raise FleetError("No runs found.")
+    run_dir = state / RUNS_DIR / run_id
+    run_json = run_dir / "run.json"
+    data = json.loads(run_json.read_text())
+
+    target = args.target
+    paths: list[pathlib.Path] = []
+    if target == "events":
+        paths = [run_dir / "events.jsonl"]
+    elif target == "reconciler":
+        reconciler = data.get("reconciler") or {}
+        paths = [
+            pathlib.Path(reconciler.get("last_message_path", run_dir / "reconciler" / "last_message.md")),
+            pathlib.Path(reconciler.get("stderr_path", run_dir / "reconciler" / "stderr.log")),
+        ]
+    else:
+        worker = data.get("workers", {}).get(target)
+        if not worker:
+            matches = [
+                value
+                for key, value in data.get("workers", {}).items()
+                if key.startswith(target)
+            ]
+            if len(matches) == 1:
+                worker = matches[0]
+        if not worker:
+            raise FleetError(f"Unknown log target: {target}")
+        paths = [
+            pathlib.Path(worker["last_message_path"]),
+            pathlib.Path(worker["stderr_path"]),
+            pathlib.Path(worker["diff_path"]),
+        ]
+
+    for path in paths:
+        print(f"==> {rel_to_repo(root, path)}")
+        if path.exists() and args.tail:
+            lines = path.read_text(errors="replace").splitlines()
+            for line in lines[-args.tail :]:
+                print(line)
+        elif path.exists():
+            print(path.read_text(errors="replace"))
+        else:
+            print("(missing)")
+    return 0
+
+
+def command_clean(args: argparse.Namespace) -> int:
+    root = git_root()
+    state = ensure_state(root)
+    run_id = args.run or latest_run_id(state)
+    if not run_id:
+        print("No runs found.")
+        return 0
+
+    removed = remove_run_worktrees(root, state, run_id, verbose=args.verbose)
+    if removed == 0:
+        print(f"No worktrees found for {run_id}.")
+        return 0
+    print(f"Removed {removed} worktree(s) for run {run_id}.")
+    return 0
+
+
+def command_doctor(args: argparse.Namespace) -> int:
+    root = git_root()
+    state = ensure_state(root)
+    codex_path = shutil.which("codex")
+    python_version = sys.version.split()[0]
+    git_version = run_cmd(["git", "--version"], check=False).stdout.strip()
+    codex_version = (
+        run_cmd(["codex", "--version"], check=False).stdout.strip() if codex_path else "missing"
+    )
+    base_ref, base_sha, base_meta = resolve_base_ref(root, None)
+    jj_path = shutil.which("jj")
+    print(f"Repo: {root}")
+    print(f"State: {state}")
+    print(f"Python: {python_version}")
+    print(f"Git: {git_version}")
+    print(f"JJ: {run_cmd(['jj', '--version'], check=False).stdout.strip() if jj_path else 'missing'} ({jj_path or 'not found'})")
+    print(f"Default worker base: {format_base_summary(base_ref, base_sha, base_meta)}")
+    print(f"Codex: {codex_version} ({codex_path or 'not found'})")
+    print(f"Queue: {len(queue_files(state))} pending job(s)")
+    print(f"Latest run: {latest_run_id(state) or 'none'}")
+    return 0
+
+
+def shell_join(args: list[str]) -> str:
+    return " ".join(shlex.quote(str(arg)) for arg in args)
+
+
+def backend_self_path() -> str:
+    return str(pathlib.Path(__file__).resolve())
+
+
+def lock_run_state(run_json: pathlib.Path, callback):
+    lock_path = run_json.parent / ".run.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        data = json.loads(run_json.read_text()) if run_json.exists() else {}
+        result = callback(data)
+        write_json(run_json, data)
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+    return result
+
+
+def headful_run_paths(root: pathlib.Path, run_id: str) -> tuple[pathlib.Path, pathlib.Path, pathlib.Path]:
+    state = ensure_state(root)
+    run_dir = state / RUNS_DIR / run_id
+    return state, run_dir, run_dir / "run.json"
+
+
+def headful_load_run(root: pathlib.Path, run_id: str) -> dict[str, Any]:
+    _state, _run_dir, run_json = headful_run_paths(root, run_id)
+    return json.loads(run_json.read_text())
+
+
+def headful_event(run_dir: pathlib.Path, event: str, **data: Any) -> None:
+    append_jsonl(run_dir / "events.jsonl", {"ts": now_iso(), "event": event, **data})
+
+
+def headful_tmux(args: list[str], check: bool = True) -> subprocess.CompletedProcess[str]:
+    return run_cmd(["tmux", *args], check=check)
+
+
+def headful_capture_pane(pane: str) -> str:
+    result = headful_tmux(["capture-pane", "-p", "-t", pane], check=False)
+    return result.stdout if result.returncode == 0 else ""
+
+
+def headful_screen_is_idle(text: str) -> bool:
+    if "esc to interrupt" in text:
+        return False
+    if re.search(r"\bWorking\s*\(", text):
+        return False
+    if "› Improve documentation in @filename" in text:
+        return True
+    return bool(re.search(r"\n› [^\n]*\n\n\s+gpt-", text))
+
+
+def headful_watch_codex_pane(pane: str, process: subprocess.Popen[Any]) -> None:
+    saw_turn = False
+    idle_ticks = 0
+    trust_sent = False
+
+    while process.poll() is None:
+        time.sleep(1)
+        text = headful_capture_pane(pane)
+
+        if (
+            not trust_sent
+            and "Do you trust the contents of this directory?" in text
+            and ("Press enter to continue" in text or "1. Yes" in text)
+        ):
+            headful_tmux(["send-keys", "-t", pane, "Enter"], check=False)
+            trust_sent = True
+            continue
+
+        if "esc to interrupt" in text or re.search(r"\bWorking\s*\(", text):
+            saw_turn = True
+            idle_ticks = 0
+            continue
+
+        if saw_turn and headful_screen_is_idle(text):
+            idle_ticks += 1
+            if idle_ticks >= 2:
+                headful_tmux(["send-keys", "-t", pane, "C-d"], check=False)
+                try:
+                    process.wait(timeout=15)
+                except subprocess.TimeoutExpired:
+                    headful_tmux(["send-keys", "-t", pane, "C-c"], check=False)
+                    try:
+                        process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        process.terminate()
+                return
+        else:
+            idle_ticks = 0
+
+
+def headful_close_pane(message: str, delay: float = 2.0) -> None:
+    print()
+    print(message, flush=True)
+    time.sleep(delay)
+    pane = os.environ.get("TMUX_PANE")
+    if pane:
+        headful_tmux(["kill-pane", "-t", pane], check=False)
+
+
+def headful_spawn_pane(root: pathlib.Path, controller_pane: str, cmd: list[str]) -> str:
+    result = headful_tmux(
+        [
+            "split-window",
+            "-d",
+            "-P",
+            "-F",
+            "#{pane_id}",
+            "-t",
+            controller_pane,
+            "-c",
+            str(root),
+            shell_join(cmd),
+        ]
+    )
+    pane = result.stdout.strip()
+    headful_tmux(["select-layout", "tiled"], check=False)
+    return pane
+
+
+def headful_worker_command(args: argparse.Namespace, run_id: str, job_id: str) -> list[str]:
+    cmd = [
+        backend_self_path(),
+        "headful-worker",
+        "--run",
+        run_id,
+        "--job",
+        job_id,
+        "--model",
+        effective_model(args),
+        "--reasoning-effort",
+        effective_reasoning_effort(args),
+    ]
+    if args.danger:
+        cmd.append("--danger")
+    if args.search:
+        cmd.append("--search")
+    return cmd
+
+
+def headful_reconciler_command(args: argparse.Namespace, run_id: str) -> list[str]:
+    cmd = [
+        backend_self_path(),
+        "headful-reconciler",
+        "--run",
+        run_id,
+        "--model",
+        effective_model(args),
+        "--reasoning-effort",
+        effective_reasoning_effort(args),
+    ]
+    if args.danger:
+        cmd.append("--danger")
+    if args.search:
+        cmd.append("--search")
+    return cmd
+
+
+def command_headful(args: argparse.Namespace) -> int:
+    root = git_root()
+    if not shutil.which("tmux"):
+        raise FleetError("Headful mode requires tmux.")
+    if not shutil.which("codex"):
+        raise FleetError("Could not find `codex` on PATH.")
+
+    session = f"codex-fleet-{compact_time()}-{random.randrange(1000, 9999)}"
+    cmd = [
+        backend_self_path(),
+        "headful-controller",
+        "--session",
+        session,
+        "-j",
+        str(args.jobs),
+        "--auto-reconcile-delay",
+        str(args.auto_reconcile_delay),
+        "--model",
+        effective_model(args),
+        "--reasoning-effort",
+        effective_reasoning_effort(args),
+    ]
+    if args.base:
+        cmd.extend(["--base", args.base])
+    if not args.require_clean:
+        cmd.append("--allow-dirty")
+    if args.no_reconcile:
+        cmd.append("--no-reconcile")
+    if args.safe:
+        cmd.append("--safe")
+    if args.no_search:
+        cmd.append("--no-search")
+    if args.flush_queue:
+        cmd.append("--flush-queue")
+
+    tmux_cmd = shell_join(cmd)
+    if os.environ.get("TMUX"):
+        headful_tmux(["new-window", "-n", session[:24], "-c", str(root), tmux_cmd])
+        return 0
+
+    os.execvp("tmux", ["tmux", "new-session", "-s", session, "-c", str(root), tmux_cmd])
+    return 0
+
+
+def command_headful_controller(args: argparse.Namespace) -> int:
+    args.danger = not args.safe
+    args.search = not args.no_search
+    root = git_root()
+    state = ensure_state(root)
+
+    if args.flush_queue:
+        flush_queue(state)
+    if not args.allow_dirty and not repo_is_clean(root):
+        raise FleetError(
+            "The repo has uncommitted changes. Re-run with --allow-dirty or use "
+            "`codex-fleet headful` without --require-clean."
+        )
+
+    controller_pane = os.environ.get("TMUX_PANE") or ""
+    deferred_messages: list[str] = []
+    next_batch_messages: list[str] = []
+    input_history: list[str] = []
+    batch_number = 0
+
+    def create_headful_run() -> tuple[str, pathlib.Path, str, str, dict[str, Any]]:
+        run_id = f"{compact_time()}-{random.randrange(1000, 9999)}"
+        run_dir = state / RUNS_DIR / run_id
+        run_dir.mkdir(parents=True, exist_ok=True)
+        (state / RUNS_DIR / "latest").write_text(run_id + "\n")
+
+        base_ref, base_sha, base_meta = resolve_base_ref(root, args.base)
+        run_state: dict[str, Any] = {
+            "run_id": run_id,
+            "repo_root": str(root),
+            "branch": current_branch(root),
+            "base_ref": base_ref,
+            "base_sha": base_sha,
+            "base": base_meta,
+            "started_at": now_iso(),
+            "completed_at": None,
+            "phase": "input_open",
+            "concurrency": args.jobs,
+            "model": effective_model(args),
+            "reasoning_effort": effective_reasoning_effort(args),
+            "jobs": {},
+            "workers": {},
+            "reconciler": None,
+            "mode": "headful-tmux",
+            "headful": {
+                "session": args.session,
+                "controller_pane": controller_pane,
+                "input_finished": False,
+                "auto_reconcile_delay": args.auto_reconcile_delay,
+                "deferred_message_count": 0,
+            },
+        }
+        write_json(run_dir / "run.json", run_state)
+        headful_event(
+            run_dir,
+            "headful_run_created",
+            run_id=run_id,
+            base_ref=base_ref,
+            base_sha=base_sha,
+            **base_meta,
+        )
+        return run_id, run_dir, base_ref, base_sha, base_meta
+
+    while True:
+        batch_number += 1
+        run_id, run_dir, base_ref, base_sha, base_meta = create_headful_run()
+
+        if batch_number == 1:
+            print(f"Codex Fleet headful run {run_id}")
+        else:
+            print(f"\nCodex Fleet headful run {run_id} (message queue batch {batch_number})")
+        print(f"Repo: {root}")
+        print(f"Model: {effective_model(args)} ({effective_reasoning_effort(args)})")
+        print(f"Base: {format_base_summary(base_ref, base_sha, base_meta)}")
+        print(f"Telemetry: {rel_to_repo(root, run_dir)}")
+        if args.allow_dirty:
+            print("Warning: --allow-dirty is enabled; reconciler will edit the current checkout.")
+        print("Enter starts a worker immediately in the current batch.")
+        print("Tab queues a message for the next batch after this batch is fully applied/reconciled.")
+        print("Ctrl-A/E move, Ctrl-W/U edit, Ctrl-D finishes input, Ctrl-C clears or cancels.")
+        print()
+
+        stop_input = threading.Event()
+        last_submit = {"monotonic": time.monotonic()}
+
+        monitor = threading.Thread(
+            target=headful_monitor_loop,
+            args=(root, run_id, args, controller_pane, stop_input, last_submit),
+            daemon=True,
+        )
+        monitor.start()
+
+        for queued_message in next_batch_messages:
+            job_id = headful_submit_prompt(root, run_id, args, controller_pane, queued_message)
+            last_submit["monotonic"] = time.monotonic()
+            print(f"started queued message {job_id}: {queued_message[:96]}")
+        next_batch_messages = []
+
+        canceled = headful_input_loop(
+            root,
+            run_id,
+            args,
+            controller_pane,
+            stop_input,
+            last_submit,
+            deferred_messages,
+            input_history,
+        )
+        if canceled:
+            return 130
+
+        print("\ninput closed; waiting for workers/reconciler...")
+        terminal_phase = None
+        while True:
+            data = headful_load_run(root, run_id)
+            phase = data.get("phase")
+            if phase in {
+                "completed",
+                "canceled",
+                "reconciler_failed",
+                "direct_apply_failed",
+                "no_successful_workers",
+                "workers_completed",
+            }:
+                terminal_phase = phase
+                print(f"run {run_id}: {phase}")
+                print(f"health: codex-fleet health --run {run_id}")
+                break
+            time.sleep(1)
+
+        if deferred_messages and terminal_phase in {"completed", "workers_completed"}:
+            next_batch_messages = deferred_messages[:]
+            deferred_messages.clear()
+            print(f"starting next batch from {len(next_batch_messages)} queued message(s)")
+            continue
+
+        return 0 if terminal_phase in {"completed", "workers_completed"} else 1
+
+
+def headful_input_loop(
+    root: pathlib.Path,
+    run_id: str,
+    args: argparse.Namespace,
+    controller_pane: str,
+    stop_input: threading.Event,
+    last_submit: dict[str, float],
+    deferred_messages: list[str],
+    history: list[str],
+) -> bool:
+    fd = sys.stdin.fileno()
+    old_settings = termios.tcgetattr(fd)
+    buffer = ""
+    cursor = 0
+    canceled = False
+    history_index: int | None = None
+    history_draft = ""
+
+    def display_input(value: str) -> str:
+        return value.replace("\t", "\\t").replace("\n", "\\n")
+
+    def redraw() -> None:
+        prefix = "fleet> "
+        rendered = display_input(buffer)
+        rendered_before_cursor = display_input(buffer[:cursor])
+        columns = max(20, shutil.get_terminal_size((80, 24)).columns)
+        available = max(1, columns - len(prefix) - 1)
+        cursor_col = len(rendered_before_cursor)
+        visible_start = min(
+            max(0, cursor_col - available + 1),
+            max(0, len(rendered) - available),
+        )
+        visible = rendered[visible_start : visible_start + available]
+        visible_cursor_col = max(0, min(len(visible), cursor_col - visible_start))
+        tail = len(visible) - visible_cursor_col
+        sys.stdout.write("\r\033[2K" + prefix + visible)
+        if tail > 0:
+            sys.stdout.write(f"\033[{tail}D")
+        sys.stdout.flush()
+
+    def insert_text(text: str) -> None:
+        nonlocal buffer, cursor, history_index, history_draft
+        if not text:
+            return
+        text = text.replace("\r\n", "\n").replace("\r", "\n")
+        buffer = buffer[:cursor] + text + buffer[cursor:]
+        cursor += len(text)
+        history_index = None
+        history_draft = ""
+
+    def read_escape_suffix() -> bytes:
+        suffix = bytearray()
+        while len(suffix) < 16:
+            readable, _w, _x = select.select([sys.stdin], [], [], 0.025)
+            if not readable:
+                break
+            suffix.extend(os.read(fd, 1))
+            current = bytes(suffix)
+            if current in {b"[A", b"[B", b"[C", b"[D", b"OH", b"OF"}:
+                break
+            if current.endswith(b"~"):
+                break
+            if len(current) > 1 and chr(current[-1]).isalpha():
+                break
+        return bytes(suffix)
+
+    def read_bracketed_paste() -> str:
+        end_marker = b"\x1b[201~"
+        data = bytearray()
+        while end_marker not in data:
+            readable, _w, _x = select.select([sys.stdin], [], [], 5.0)
+            if not readable:
+                break
+            data.extend(os.read(fd, 4096))
+            if len(data) > 2_000_000:
+                break
+        payload = bytes(data)
+        end = payload.find(end_marker)
+        if end >= 0:
+            payload = payload[:end]
+        return payload.decode(errors="ignore")
+
+    def delete_previous_word() -> None:
+        nonlocal buffer, cursor, history_index, history_draft
+        if cursor == 0:
+            return
+        start = cursor
+        while start > 0 and buffer[start - 1].isspace():
+            start -= 1
+        while start > 0 and not buffer[start - 1].isspace():
+            start -= 1
+        buffer = buffer[:start] + buffer[cursor:]
+        cursor = start
+        history_index = None
+        history_draft = ""
+
+    def move_previous_word() -> None:
+        nonlocal cursor
+        start = cursor
+        while start > 0 and buffer[start - 1].isspace():
+            start -= 1
+        while start > 0 and not buffer[start - 1].isspace():
+            start -= 1
+        cursor = start
+
+    def move_next_word() -> None:
+        nonlocal cursor
+        end = cursor
+        length = len(buffer)
+        while end < length and not buffer[end].isspace():
+            end += 1
+        while end < length and buffer[end].isspace():
+            end += 1
+        cursor = end
+
+    def set_input(value: str) -> None:
+        nonlocal buffer, cursor
+        buffer = value
+        cursor = len(buffer)
+
+    def browse_history(direction: int) -> None:
+        nonlocal history_index, history_draft
+        if not history:
+            return
+        if history_index is None:
+            if direction > 0:
+                return
+            history_draft = buffer
+            history_index = len(history) - 1
+        elif direction < 0:
+            history_index = max(0, history_index - 1)
+        else:
+            if history_index >= len(history) - 1:
+                set_input(history_draft)
+                history_index = None
+                history_draft = ""
+                return
+            history_index += 1
+        set_input(history[history_index])
+
+    def remember_prompt(prompt: str) -> None:
+        if not history or history[-1] != prompt:
+            history.append(prompt)
+
+    def clear_input() -> None:
+        nonlocal buffer, cursor, history_index, history_draft
+        buffer = ""
+        cursor = 0
+        history_index = None
+        history_draft = ""
+
+    def run_has_workers() -> bool:
+        try:
+            data = headful_load_run(root, run_id)
+        except Exception:
+            return True
+        return bool(data.get("workers"))
+
+    def record_deferred_count() -> None:
+        _state, _run_dir, run_json = headful_run_paths(root, run_id)
+
+        def update(data: dict[str, Any]) -> None:
+            data.setdefault("headful", {})["deferred_message_count"] = len(deferred_messages)
+
+        lock_run_state(run_json, update)
+
+    try:
+        tty.setcbreak(fd)
+        sys.stdout.write("\033[?2004h")
+        sys.stdout.flush()
+        redraw()
+        while not stop_input.is_set():
+            readable, _w, _x = select.select([sys.stdin], [], [], 0.2)
+            if not readable:
+                continue
+            ch = os.read(fd, 1)
+            if not ch:
+                headful_mark_input_finished(root, run_id)
+                break
+            value = ch.decode(errors="ignore")
+            if value == "\x03":
+                if buffer:
+                    clear_input()
+                    redraw()
+                    continue
+                canceled = True
+                headful_cancel_run(root, run_id, "frontend_cancel")
+                break
+            if value == "\x1b":
+                suffix = read_escape_suffix()
+                if suffix == b"[200~":
+                    insert_text(read_bracketed_paste())
+                    redraw()
+                    continue
+                if suffix in {b"\x7f", b"\b"}:
+                    delete_previous_word()
+                    redraw()
+                    continue
+                if suffix in {b"b", b"B", b"[1;3D", b"[1;5D", b"[5D"}:
+                    move_previous_word()
+                    redraw()
+                    continue
+                if suffix in {b"f", b"F", b"[1;3C", b"[1;5C", b"[5C"}:
+                    move_next_word()
+                    redraw()
+                    continue
+                if suffix == b"[A":
+                    browse_history(-1)
+                    redraw()
+                    continue
+                if suffix == b"[B":
+                    browse_history(1)
+                    redraw()
+                    continue
+                if suffix == b"[D":
+                    cursor = max(0, cursor - 1)
+                    redraw()
+                    continue
+                if suffix == b"[C":
+                    cursor = min(len(buffer), cursor + 1)
+                    redraw()
+                    continue
+                if suffix in {b"[H", b"OH", b"[1~"}:
+                    cursor = 0
+                    redraw()
+                    continue
+                if suffix in {b"[F", b"OF", b"[4~"}:
+                    cursor = len(buffer)
+                    redraw()
+                    continue
+                if suffix == b"[3~":
+                    if cursor < len(buffer):
+                        buffer = buffer[:cursor] + buffer[cursor + 1 :]
+                    redraw()
+                    continue
+                canceled = True
+                headful_cancel_run(root, run_id, "frontend_cancel")
+                break
+            if value == "\x01":
+                cursor = 0
+                redraw()
+                continue
+            if value == "\x05":
+                cursor = len(buffer)
+                redraw()
+                continue
+            if value == "\x15":
+                buffer = buffer[cursor:]
+                cursor = 0
+                history_index = None
+                history_draft = ""
+                redraw()
+                continue
+            if value == "\x17":
+                delete_previous_word()
+                redraw()
+                continue
+            if value == "\x04":
+                headful_mark_input_finished(root, run_id)
+                break
+            if value == "\t":
+                prompt = buffer.strip()
+                sys.stdout.write("\r\033[2K")
+                sys.stdout.flush()
+                clear_input()
+                if prompt:
+                    remember_prompt(prompt)
+                    deferred_messages.append(prompt)
+                    record_deferred_count()
+                    print(f"message queued after current batch #{len(deferred_messages)}: {prompt[:96]}")
+                    if not run_has_workers():
+                        headful_mark_input_finished(root, run_id)
+                        break
+                redraw()
+                continue
+            if value in {"\r", "\n"}:
+                prompt = buffer.strip()
+                sys.stdout.write("\r\033[2K")
+                sys.stdout.flush()
+                clear_input()
+                if prompt:
+                    remember_prompt(prompt)
+                    job_id = headful_submit_prompt(
+                        root,
+                        run_id,
+                        args,
+                        controller_pane,
+                        prompt,
+                    )
+                    last_submit["monotonic"] = time.monotonic()
+                    print(f"queued {job_id}: {prompt[:96]}")
+                redraw()
+                continue
+            if value in {"\x7f", "\b"}:
+                if cursor > 0:
+                    buffer = buffer[:cursor - 1] + buffer[cursor:]
+                    cursor -= 1
+                    history_index = None
+                    history_draft = ""
+                redraw()
+                continue
+            if value.isprintable():
+                insert_text(value)
+                redraw()
+    finally:
+        sys.stdout.write("\033[?2004l")
+        sys.stdout.flush()
+        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+    return canceled
+
+
+def headful_mark_input_finished(root: pathlib.Path, run_id: str) -> None:
+    _state, run_dir, run_json = headful_run_paths(root, run_id)
+
+    def update(data: dict[str, Any]) -> None:
+        data.setdefault("headful", {})["input_finished"] = True
+        if not data.get("workers"):
+            data["phase"] = "completed"
+            data["completed_at"] = now_iso()
+
+    lock_run_state(run_json, update)
+    headful_event(run_dir, "headful_input_finished")
+
+
+def headful_submit_prompt(
+    root: pathlib.Path,
+    run_id: str,
+    args: argparse.Namespace,
+    controller_pane: str,
+    body: str,
+) -> str:
+    state, run_dir, run_json = headful_run_paths(root, run_id)
+    inferred_title = first_heading_or_line(body, "job")
+    job_id = f"{compact_time()}-{random.randrange(100000, 999999)}-{slugify(inferred_title)}"
+    claimed_jobs_dir = run_dir / "jobs"
+    archive_dir = state / ARCHIVE_DIR / run_id
+    claimed_jobs_dir.mkdir(parents=True, exist_ok=True)
+    archive_dir.mkdir(parents=True, exist_ok=True)
+    path = claimed_jobs_dir / f"{job_id}.md"
+    archive_path = archive_dir / f"{job_id}.md"
+    content = job_file_content(job_id, body, inferred_title, "default")
+    path.write_text(content)
+    archive_path.write_text(content)
+
+    worker_dir = run_dir / "workers" / job_id
+    worktree = state / WORKTREES_DIR / run_id / job_id
+    job = {
+        "id": job_id,
+        "title": inferred_title,
+        "layer": "default",
+        "path": str(path),
+        "body": body,
+        "meta": {},
+    }
+    worker = worker_base_state(job, worker_dir, worktree)
+
+    def update(data: dict[str, Any]) -> None:
+        if data.get("reconciler"):
+            raise FleetError("Reconciler already started; this headful run is closed to new prompts.")
+        data["jobs"][job_id] = {
+            "id": job_id,
+            "title": inferred_title,
+            "layer": "default",
+            "path": str(path),
+            "body": body,
+        }
+        data["workers"][job_id] = worker
+        data["phase"] = "workers_running"
+
+    lock_run_state(run_json, update)
+    headful_event(run_dir, "headful_job_received", job_id=job_id, title=inferred_title)
+    pane = headful_spawn_pane(root, controller_pane, headful_worker_command(args, run_id, job_id))
+
+    def update_pane(data: dict[str, Any]) -> None:
+        data["workers"][job_id]["pane_id"] = pane
+
+    lock_run_state(run_json, update_pane)
+    return job_id
+
+
+def headful_monitor_loop(
+    root: pathlib.Path,
+    run_id: str,
+    args: argparse.Namespace,
+    controller_pane: str,
+    stop_input: threading.Event,
+    last_submit: dict[str, float],
+) -> None:
+    _state, run_dir, run_json = headful_run_paths(root, run_id)
+    reconcile_started = False
+
+    while True:
+        time.sleep(1)
+        try:
+            data = json.loads(run_json.read_text())
+        except (OSError, json.JSONDecodeError):
+            continue
+
+        phase = data.get("phase")
+        if phase in {"completed", "canceled", "reconciler_failed", "direct_apply_failed", "no_successful_workers", "workers_completed"}:
+            stop_input.set()
+            return
+
+        workers = data.get("workers") or {}
+        if not workers or data.get("reconciler") or reconcile_started:
+            continue
+        if any(worker.get("status") not in {"succeeded", "failed", "canceled"} for worker in workers.values()):
+            continue
+        input_finished = bool((data.get("headful") or {}).get("input_finished"))
+        quiet_long_enough = time.monotonic() - last_submit["monotonic"] >= args.auto_reconcile_delay
+        if not input_finished and not quiet_long_enough:
+            continue
+
+        succeeded = [worker for worker in workers.values() if worker.get("status") == "succeeded"]
+        if not succeeded:
+            def mark_no_success(state: dict[str, Any]) -> None:
+                state["phase"] = "no_successful_workers"
+                state["completed_at"] = now_iso()
+
+            lock_run_state(run_json, mark_no_success)
+            headful_event(run_dir, "headful_no_successful_workers")
+            stop_input.set()
+            return
+
+        if len(workers) == 1 and len(succeeded) == 1:
+            try:
+                direct_apply = apply_single_worker_to_checkout(root, succeeded[0])
+            except FleetError as exc:
+                def mark_apply_failed(state: dict[str, Any]) -> None:
+                    state["phase"] = "direct_apply_failed"
+                    state["completed_at"] = now_iso()
+                    state["direct_apply"] = {
+                        "status": "failed",
+                        "worker_id": succeeded[0].get("job_id"),
+                        "error": str(exc),
+                        "completed_at": now_iso(),
+                    }
+
+                lock_run_state(run_json, mark_apply_failed)
+                headful_event(run_dir, "headful_single_worker_direct_apply_failed", error=str(exc))
+                stop_input.set()
+                return
+
+            def mark_direct_applied(state: dict[str, Any]) -> None:
+                state["phase"] = "completed"
+                state["completed_at"] = now_iso()
+                state["direct_apply"] = direct_apply
+
+            lock_run_state(run_json, mark_direct_applied)
+            headful_event(run_dir, "headful_single_worker_direct_applied", **direct_apply)
+            stop_input.set()
+            return
+
+        if args.no_reconcile:
+            def mark_done(state: dict[str, Any]) -> None:
+                state["phase"] = "workers_completed"
+                state["completed_at"] = now_iso()
+
+            lock_run_state(run_json, mark_done)
+            headful_event(run_dir, "headful_workers_completed_no_reconcile")
+            stop_input.set()
+            return
+
+        def queue_reconciler(state: dict[str, Any]) -> None:
+            state["reconciler"] = {
+                "status": "queued",
+                "pid": None,
+                "started_at": None,
+                "completed_at": None,
+                "duration_seconds": None,
+                "exit_code": None,
+                "pane_id": None,
+            }
+            state["phase"] = "reconciler_queued"
+
+        lock_run_state(run_json, queue_reconciler)
+        pane = headful_spawn_pane(root, controller_pane, headful_reconciler_command(args, run_id))
+
+        def record_pane(state: dict[str, Any]) -> None:
+            state["reconciler"]["pane_id"] = pane
+
+        lock_run_state(run_json, record_pane)
+        headful_event(run_dir, "headful_reconciler_queued", pane_id=pane)
+        reconcile_started = True
+        stop_input.set()
+
+
+def headful_cancel_run(root: pathlib.Path, run_id: str, reason: str) -> None:
+    state, run_dir, run_json = headful_run_paths(root, run_id)
+    data = json.loads(run_json.read_text())
+    panes = [
+        worker.get("pane_id")
+        for worker in (data.get("workers") or {}).values()
+        if worker.get("status") not in {"succeeded", "failed", "canceled"}
+    ]
+    reconciler = data.get("reconciler") or {}
+    if reconciler.get("pane_id"):
+        panes.append(reconciler["pane_id"])
+    for pane in panes:
+        if pane:
+            headful_tmux(["kill-pane", "-t", str(pane)], check=False)
+    removed = remove_run_worktrees(root, state, run_id)
+
+    def update(data: dict[str, Any]) -> None:
+        for worker in data.get("workers", {}).values():
+            if worker.get("status") not in {"succeeded", "failed", "canceled"}:
+                worker["status"] = "canceled"
+                worker["completed_at"] = now_iso()
+                worker["pid_alive"] = False
+        data["phase"] = "canceled"
+        data["completed_at"] = now_iso()
+        data["cleanup"] = {"worktrees_removed": removed}
+
+    lock_run_state(run_json, update)
+    headful_event(run_dir, "headful_canceled", reason=reason, worktrees_removed=removed)
+
+
+def command_headful_worker(args: argparse.Namespace) -> int:
+    root = git_root()
+    state, run_dir, run_json = headful_run_paths(root, args.run)
+    data = json.loads(run_json.read_text())
+    job = data["jobs"][args.job]
+    worker = data["workers"][args.job]
+    worker_dir = pathlib.Path(worker["worker_dir"])
+    worktree = pathlib.Path(worker["worktree"])
+    worker_dir.mkdir(parents=True, exist_ok=True)
+
+    def mark_preparing(data: dict[str, Any]) -> None:
+        data["workers"][args.job]["status"] = "preparing"
+
+    lock_run_state(run_json, mark_preparing)
+
+    add_result = run_cmd(
+        ["git", "worktree", "add", "--detach", str(worktree), data["base_ref"]],
+        cwd=root,
+        check=False,
+    )
+    (worker_dir / "worktree-add.stdout").write_text(add_result.stdout)
+    (worker_dir / "worktree-add.stderr").write_text(add_result.stderr)
+    if add_result.returncode != 0:
+        def mark_failed(data: dict[str, Any]) -> None:
+            worker_state = data["workers"][args.job]
+            worker_state.update(
+                {
+                    "status": "failed",
+                    "exit_code": add_result.returncode,
+                    "completed_at": now_iso(),
+                    "error": "git worktree add failed",
+                }
+            )
+
+        lock_run_state(run_json, mark_failed)
+        headful_event(run_dir, "headful_worker_failed", job_id=args.job, reason="worktree_add_failed")
+        headful_close_pane(f"worker {args.job} failed while creating worktree")
+        return 1
+
+    prompt = build_worker_prompt(job, list(data["jobs"].values()), data)
+    pathlib.Path(worker["prompt_path"]).write_text(prompt)
+
+    cmd = ["codex", "--no-alt-screen"]
+    if args.search:
+        cmd.append("--search")
+    cmd.extend(["--cd", str(worktree)])
+    add_model_args(cmd, args.model, args.reasoning_effort)
+    if args.danger:
+        cmd.append("--dangerously-bypass-approvals-and-sandbox")
+    else:
+        cmd.extend(["--ask-for-approval", "never", "--sandbox", "workspace-write"])
+    cmd.append(prompt)
+
+    pane = os.environ.get("TMUX_PANE", "")
+    start = time.monotonic()
+
+    def mark_running(data: dict[str, Any]) -> None:
+        worker_state = data["workers"][args.job]
+        worker_state.update(
+            {
+                "status": "running",
+                "started_at": now_iso(),
+                "command": cmd,
+                "pane_id": pane or worker_state.get("pane_id"),
+            }
+        )
+
+    lock_run_state(run_json, mark_running)
+    headful_event(run_dir, "headful_worker_start", job_id=args.job, command=cmd, pane_id=pane)
+
+    process = subprocess.Popen(cmd, cwd=str(worktree))
+    watcher = threading.Thread(target=headful_watch_codex_pane, args=(pane, process), daemon=True)
+    watcher.start()
+    exit_code = process.wait()
+    duration = time.monotonic() - start
+    screen = headful_capture_pane(pane) if pane else ""
+    (worker_dir / "screen.txt").write_text(screen)
+    pathlib.Path(worker["last_message_path"]).write_text(
+        "# Headful Codex screen capture\n\n"
+        "This worker ran in the interactive Codex TUI. The final visible pane "
+        "capture is below.\n\n"
+        "```text\n"
+        f"{screen}\n"
+        "```\n"
+    )
+    files, status, diff = collect_diff(worktree, worker_dir)
+
+    def mark_done(data: dict[str, Any]) -> None:
+        worker_state = data["workers"][args.job]
+        worker_state.update(
+            {
+                "status": "succeeded" if exit_code == 0 else "failed",
+                "exit_code": exit_code,
+                "completed_at": now_iso(),
+                "duration_seconds": round(duration, 2),
+                "pid_alive": False,
+                "files_changed": files,
+                "git_status": status,
+                "diff_bytes": len(diff.encode()),
+                "screen_path": str(worker_dir / "screen.txt"),
+            }
+        )
+
+    lock_run_state(run_json, mark_done)
+    headful_event(
+        run_dir,
+        "headful_worker_succeeded" if exit_code == 0 else "headful_worker_failed",
+        job_id=args.job,
+        exit_code=exit_code,
+        duration_seconds=round(duration, 2),
+        files_changed=files,
+    )
+    headful_close_pane(
+        f"worker {args.job} {'done' if exit_code == 0 else 'failed'} "
+        f"in {format_duration(duration)}"
+    )
+    return exit_code
+
+
+def command_headful_reconciler(args: argparse.Namespace) -> int:
+    root = git_root()
+    _state, run_dir, run_json = headful_run_paths(root, args.run)
+    data = json.loads(run_json.read_text())
+    reconciler_dir = run_dir / "reconciler"
+    reconciler_dir.mkdir(parents=True, exist_ok=True)
+
+    prompt = build_reconciler_prompt(root, run_dir, data)
+    prompt_path = reconciler_dir / "prompt.md"
+    last_message_path = reconciler_dir / "last_message.md"
+    stderr_path = reconciler_dir / "stderr.log"
+    prompt_path.write_text(prompt)
+    stderr_path.write_text("")
+
+    cmd = ["codex", "--no-alt-screen"]
+    if args.search:
+        cmd.append("--search")
+    cmd.extend(["--cd", str(root)])
+    add_model_args(cmd, args.model, args.reasoning_effort)
+    if args.danger:
+        cmd.append("--dangerously-bypass-approvals-and-sandbox")
+    else:
+        cmd.extend(["--ask-for-approval", "never", "--sandbox", "workspace-write"])
+    cmd.append(prompt)
+
+    pane = os.environ.get("TMUX_PANE", "")
+    start = time.monotonic()
+
+    def mark_running(data: dict[str, Any]) -> None:
+        data["phase"] = "reconciling"
+        data["reconciler"].update(
+            {
+                "status": "running",
+                "started_at": now_iso(),
+                "prompt_path": str(prompt_path),
+                "stderr_path": str(stderr_path),
+                "last_message_path": str(last_message_path),
+                "command": cmd,
+                "pane_id": pane or data["reconciler"].get("pane_id"),
+            }
+        )
+
+    lock_run_state(run_json, mark_running)
+    headful_event(run_dir, "headful_reconciler_start", command=cmd, pane_id=pane)
+
+    process = subprocess.Popen(cmd, cwd=str(root))
+    watcher = threading.Thread(target=headful_watch_codex_pane, args=(pane, process), daemon=True)
+    watcher.start()
+    exit_code = process.wait()
+    duration = time.monotonic() - start
+    screen = headful_capture_pane(pane) if pane else ""
+    (reconciler_dir / "screen.txt").write_text(screen)
+    last_message_path.write_text(
+        "# Headful Codex reconciler screen capture\n\n"
+        "The reconciler ran in the interactive Codex TUI. The final visible pane "
+        "capture is below.\n\n"
+        "```text\n"
+        f"{screen}\n"
+        "```\n"
+    )
+
+    final_status = run_cmd(["git", "status", "--short"], cwd=root, check=False).stdout
+    final_stat = run_cmd(["git", "diff", "--stat"], cwd=root, check=False).stdout
+    (reconciler_dir / "final-git-status.txt").write_text(final_status)
+    (reconciler_dir / "final-diff-stat.txt").write_text(final_stat)
+
+    def mark_done(data: dict[str, Any]) -> None:
+        data["phase"] = "completed" if exit_code == 0 else "reconciler_failed"
+        data["completed_at"] = now_iso()
+        data["reconciler"].update(
+            {
+                "status": "succeeded" if exit_code == 0 else "failed",
+                "exit_code": exit_code,
+                "completed_at": now_iso(),
+                "duration_seconds": round(duration, 2),
+                "pid_alive": False,
+                "screen_path": str(reconciler_dir / "screen.txt"),
+                "final_git_status_path": str(reconciler_dir / "final-git-status.txt"),
+                "final_diff_stat_path": str(reconciler_dir / "final-diff-stat.txt"),
+            }
+        )
+
+    lock_run_state(run_json, mark_done)
+    headful_event(
+        run_dir,
+        "headful_reconciler_succeeded" if exit_code == 0 else "headful_reconciler_failed",
+        exit_code=exit_code,
+        duration_seconds=round(duration, 2),
+    )
+    headful_close_pane(
+        f"reconciler {'done' if exit_code == 0 else 'failed'} "
+        f"in {format_duration(duration)}"
+    )
+    return exit_code
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="codex-fleet",
+        description=(
+            "Parallel Codex CLI worker queue with git worktrees and telemetry. "
+            "Bare `codex-fleet` captures prompts and runs them immediately."
+        ),
+    )
+    sub = parser.add_subparsers(dest="command", metavar="command", required=True)
+
+    quick = sub.add_parser(
+        "quick",
+        help="capture prompts and run immediately; this is also the bare-command default",
+    )
+    quick.add_argument("--separator", default="---", help="line that separates jobs; default: ---")
+    quick.add_argument("--title-prefix", help="optional title prefix for generated jobs")
+    quick.add_argument("--layer", default="default", help="coordination label; default: default")
+    quick.add_argument("-j", "--jobs", type=int, default=3, help="parallel worker count")
+    quick.add_argument("--base", help="git ref for worker worktrees; default: HEAD")
+    quick.add_argument("--allow-dirty", action="store_true", help="allow reconciling onto a dirty checkout")
+    quick.add_argument("--no-reconcile", action="store_true", help="run workers only")
+    quick.add_argument("--model", default=DEFAULT_MODEL, help=f"Codex model; default: {DEFAULT_MODEL}")
+    quick.add_argument(
+        "--reasoning-effort",
+        default=DEFAULT_REASONING_EFFORT,
+        help=f"Codex reasoning effort; default: {DEFAULT_REASONING_EFFORT}",
+    )
+    quick.add_argument(
+        "--safe",
+        action="store_true",
+        help="do not pass dangerous full-access mode to Codex workers",
+    )
+    quick.add_argument(
+        "--no-search",
+        action="store_true",
+        help="do not enable Codex web search for workers and reconciler",
+    )
+    quick.set_defaults(
+        func=lambda args: command_capture(
+            argparse.Namespace(
+                separator=args.separator,
+                title_prefix=args.title_prefix,
+                layer=args.layer,
+                run=True,
+                jobs=args.jobs,
+                base=args.base,
+                allow_dirty=args.allow_dirty,
+                no_reconcile=args.no_reconcile,
+                model=args.model,
+                reasoning_effort=args.reasoning_effort,
+                danger=not args.safe,
+                search=not args.no_search,
+            )
+        )
+    )
+
+    add = sub.add_parser("add", help="enqueue one prompt")
+    add.add_argument("prompt", nargs="*", help="prompt text; stdin is used when omitted")
+    add.add_argument("-t", "--title", help="job title")
+    add.add_argument("--layer", default="default", help="coordination label; default: default")
+    add.set_defaults(func=command_add)
+
+    capture = sub.add_parser("capture", help="capture multiple prompts from stdin or terminal")
+    capture.add_argument("--separator", default="---", help="line that separates jobs; default: ---")
+    capture.add_argument("--title-prefix", help="optional title prefix for generated jobs")
+    capture.add_argument("--layer", default="default", help="coordination label; default: default")
+    capture.add_argument("--run", action="store_true", help="run immediately after capture")
+    capture.add_argument("-j", "--jobs", type=int, default=3, help="parallel worker count")
+    capture.add_argument(
+        "--base",
+        help="git ref for worker worktrees; default snapshots jj @ when available, otherwise HEAD",
+    )
+    capture.add_argument("--allow-dirty", action="store_true", help="allow reconciling onto a dirty checkout")
+    capture.add_argument("--no-reconcile", action="store_true", help="run workers only")
+    capture.add_argument("--model", default=DEFAULT_MODEL, help=f"Codex model; default: {DEFAULT_MODEL}")
+    capture.add_argument(
+        "--reasoning-effort",
+        default=DEFAULT_REASONING_EFFORT,
+        help=f"Codex reasoning effort; default: {DEFAULT_REASONING_EFFORT}",
+    )
+    capture.add_argument("--danger", action="store_true", help="pass Codex dangerously-bypass flag")
+    capture.add_argument("--search", action="store_true", help="enable Codex web search for workers and reconciler")
+    capture.set_defaults(func=command_capture)
+
+    run = sub.add_parser("run", help="run queued prompts in parallel and reconcile")
+    run.add_argument("-j", "--jobs", type=int, default=3, help="parallel worker count")
+    run.add_argument(
+        "--base",
+        help="git ref for worker worktrees; default snapshots jj @ when available, otherwise HEAD",
+    )
+    run.add_argument("--allow-dirty", action="store_true", help="allow reconciling onto a dirty checkout")
+    run.add_argument("--no-reconcile", action="store_true", help="run workers only")
+    run.add_argument("--model", default=DEFAULT_MODEL, help=f"Codex model; default: {DEFAULT_MODEL}")
+    run.add_argument(
+        "--reasoning-effort",
+        default=DEFAULT_REASONING_EFFORT,
+        help=f"Codex reasoning effort; default: {DEFAULT_REASONING_EFFORT}",
+    )
+    run.add_argument("--danger", action="store_true", help="pass Codex dangerously-bypass flag")
+    run.add_argument("--search", action="store_true", help="enable Codex web search for workers and reconciler")
+    run.set_defaults(func=lambda args: asyncio.run(run_batch(args)))
+
+    headful = sub.add_parser(
+        "headful",
+        help="open a tmux session with real interactive Codex TUI worker panes",
+    )
+    headful.add_argument("-j", "--jobs", type=int, default=3, help="parallel worker count")
+    headful.add_argument(
+        "--base",
+        help="git ref for worker worktrees; default snapshots jj @ when available, otherwise HEAD",
+    )
+    headful.add_argument(
+        "--require-clean",
+        action="store_true",
+        help="fail if the checkout is dirty; default allows dirty checkouts",
+    )
+    headful.add_argument("--no-reconcile", action="store_true", help="run workers only")
+    headful.add_argument("--model", default=DEFAULT_MODEL, help=f"Codex model; default: {DEFAULT_MODEL}")
+    headful.add_argument(
+        "--reasoning-effort",
+        default=DEFAULT_REASONING_EFFORT,
+        help=f"Codex reasoning effort; default: {DEFAULT_REASONING_EFFORT}",
+    )
+    headful.add_argument(
+        "--safe",
+        action="store_true",
+        help="do not pass dangerous full-access mode to Codex workers",
+    )
+    headful.add_argument(
+        "--no-search",
+        action="store_true",
+        help="do not enable Codex web search for workers and reconciler",
+    )
+    headful.add_argument(
+        "--flush-queue",
+        action="store_true",
+        help="delete stale file-queue prompts before headful input starts",
+    )
+    headful.add_argument(
+        "--auto-reconcile-delay",
+        type=float,
+        default=5.0,
+        help="seconds of quiet time before auto-reconciling after workers drain",
+    )
+    headful.set_defaults(func=command_headful)
+
+    headful_controller = sub.add_parser("headful-controller", help=argparse.SUPPRESS)
+    headful_controller.add_argument("--session", required=True)
+    headful_controller.add_argument("-j", "--jobs", type=int, default=3)
+    headful_controller.add_argument("--base")
+    headful_controller.add_argument("--allow-dirty", action="store_true")
+    headful_controller.add_argument("--no-reconcile", action="store_true")
+    headful_controller.add_argument("--model", default=DEFAULT_MODEL)
+    headful_controller.add_argument("--reasoning-effort", default=DEFAULT_REASONING_EFFORT)
+    headful_controller.add_argument("--safe", action="store_true")
+    headful_controller.add_argument("--no-search", action="store_true")
+    headful_controller.add_argument("--flush-queue", action="store_true")
+    headful_controller.add_argument("--auto-reconcile-delay", type=float, default=5.0)
+    headful_controller.set_defaults(func=command_headful_controller)
+
+    headful_worker = sub.add_parser("headful-worker", help=argparse.SUPPRESS)
+    headful_worker.add_argument("--run", required=True)
+    headful_worker.add_argument("--job", required=True)
+    headful_worker.add_argument("--model", default=DEFAULT_MODEL)
+    headful_worker.add_argument("--reasoning-effort", default=DEFAULT_REASONING_EFFORT)
+    headful_worker.add_argument("--danger", action="store_true")
+    headful_worker.add_argument("--search", action="store_true")
+    headful_worker.set_defaults(func=command_headful_worker)
+
+    headful_reconciler = sub.add_parser("headful-reconciler", help=argparse.SUPPRESS)
+    headful_reconciler.add_argument("--run", required=True)
+    headful_reconciler.add_argument("--model", default=DEFAULT_MODEL)
+    headful_reconciler.add_argument("--reasoning-effort", default=DEFAULT_REASONING_EFFORT)
+    headful_reconciler.add_argument("--danger", action="store_true")
+    headful_reconciler.add_argument("--search", action="store_true")
+    headful_reconciler.set_defaults(func=command_headful_reconciler)
+
+    live = sub.add_parser("live", help="stream prompts on stdin; each prompt starts a worker immediately")
+    live.add_argument("-j", "--jobs", type=int, default=3, help="parallel worker count")
+    live.add_argument(
+        "--base",
+        help="git ref for worker worktrees; default snapshots jj @ when available, otherwise HEAD",
+    )
+    live.add_argument("--allow-dirty", action="store_true", help="allow reconciling onto a dirty checkout")
+    live.add_argument("--no-reconcile", action="store_true", help="run workers only")
+    live.add_argument("--model", default=DEFAULT_MODEL, help=f"Codex model; default: {DEFAULT_MODEL}")
+    live.add_argument(
+        "--reasoning-effort",
+        default=DEFAULT_REASONING_EFFORT,
+        help=f"Codex reasoning effort; default: {DEFAULT_REASONING_EFFORT}",
+    )
+    live.add_argument("--danger", action="store_true", help="pass Codex dangerously-bypass flag")
+    live.add_argument("--search", action="store_true", help="enable Codex web search for workers and reconciler")
+    live.add_argument("--flush-queue", action="store_true", help="delete stale file-queue prompts before live input starts")
+    live.add_argument(
+        "--auto-reconcile-when-idle",
+        action="store_true",
+        help="start the reconciler automatically when submitted live jobs are done",
+    )
+    live.add_argument(
+        "--auto-reconcile-delay",
+        type=float,
+        default=1.0,
+        help="seconds to wait before auto-reconciling after workers drain",
+    )
+    live.set_defaults(func=lambda args: asyncio.run(run_live(args)))
+
+    reconcile = sub.add_parser("reconcile", help="run the reconciler for an existing completed worker run")
+    reconcile.add_argument("--run", help="run id; defaults to latest")
+    reconcile.add_argument("--model", help=f"Codex model; default: run model or {DEFAULT_MODEL}")
+    reconcile.add_argument(
+        "--reasoning-effort",
+        help=f"Codex reasoning effort; default: run value or {DEFAULT_REASONING_EFFORT}",
+    )
+    reconcile.add_argument("--danger", action="store_true", help="pass Codex dangerously-bypass flag")
+    reconcile.add_argument("--search", action="store_true", help="enable Codex web search for reconciler")
+    reconcile.add_argument(
+        "--force",
+        action="store_true",
+        help="reconcile even if workers are still running or already reconciled",
+    )
+    reconcile.set_defaults(func=lambda args: asyncio.run(run_reconcile_existing(args)))
+
+    list_cmd = sub.add_parser("list", help="list queued prompts")
+    list_cmd.set_defaults(func=command_list)
+
+    health = sub.add_parser("health", help="show latest run health")
+    health.add_argument("--run", help="run id; defaults to latest")
+    health.set_defaults(func=command_health)
+
+    runs = sub.add_parser("runs", help="list recent runs")
+    runs.add_argument("-n", "--limit", type=int, default=10)
+    runs.set_defaults(func=command_runs)
+
+    logs = sub.add_parser("logs", help="print worker/reconciler/event logs")
+    logs.add_argument("target", help="worker id/prefix, reconciler, or events")
+    logs.add_argument("--run", help="run id; defaults to latest")
+    logs.add_argument("--tail", type=int, help="only print last N lines per file")
+    logs.set_defaults(func=command_logs)
+
+    clean = sub.add_parser("clean", help="remove worker worktrees for a run")
+    clean.add_argument("--run", help="run id; defaults to latest")
+    clean.add_argument("-v", "--verbose", action="store_true")
+    clean.set_defaults(func=command_clean)
+
+    doctor = sub.add_parser("doctor", help="check repo, state dir, codex, and git")
+    doctor.set_defaults(func=command_doctor)
+
+    sub._choices_actions = [
+        action
+        for action in sub._choices_actions
+        if not str(getattr(action, "dest", "")).startswith("headful-")
+    ]
+    return parser
+
+
+def main() -> int:
+    parser = build_parser()
+    argv = sys.argv[1:]
+    if not argv:
+        argv = ["quick"]
+    elif argv[0].startswith("-") and argv[0] not in ("-h", "--help"):
+        argv = ["quick", *argv]
+    args = parser.parse_args(argv)
+    if hasattr(args, "jobs") and args.jobs < 1:
+        raise FleetError("--jobs must be at least 1")
+    return args.func(args)
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except KeyboardInterrupt:
+        print_err("Interrupted.")
+        raise SystemExit(130)
+    except FleetError as exc:
+        print_err(f"codex-fleet: {exc}")
+        raise SystemExit(1)

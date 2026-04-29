@@ -1,0 +1,42 @@
+#!/bin/sh
+set -eu
+
+script="$0"
+if [ -L "$script" ]; then
+  target=$(readlink "$script")
+  case "$target" in
+    /*) script="$target" ;;
+    *) script="$(dirname "$script")/$target" ;;
+  esac
+fi
+
+script_dir=$(CDPATH= cd -- "$(dirname -- "$script")" && pwd)
+repo_root=$(CDPATH= cd -- "$script_dir/.." && pwd)
+
+backend="${CODEX_FLEET_BACKEND:-$repo_root/bin/codex-fleet-backend}"
+repo_tui="$repo_root/tools/codex-fleet-tui/target/release/codex-fleet-tui"
+tui="${CODEX_FLEET_TUI:-$repo_tui}"
+
+if [ "$#" -eq 0 ]; then
+  if [ -t 0 ] && [ -t 1 ] && command -v tmux >/dev/null 2>&1; then
+    exec "$backend" headful
+  fi
+  if [ -t 0 ] && [ -t 1 ] && [ -x "$tui" ]; then
+    CODEX_FLEET_BACKEND="$backend" exec "$tui"
+  fi
+  exec "$backend" quick
+fi
+
+case "$1" in
+  headful)
+    shift
+    exec "$backend" headful "$@"
+    ;;
+  tui)
+    shift
+    CODEX_FLEET_BACKEND="$backend" exec "$tui" "$@"
+    ;;
+  *)
+    exec "$backend" "$@"
+    ;;
+esac

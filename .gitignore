@@ -1,0 +1,3 @@
+/tools/codex-fleet-tui/target/
+/.codex-fleet/
+.DS_Store

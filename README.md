@@ -21,6 +21,23 @@ Bare `codex-fleet` opens the Ratatui UI by default. The older tmux controller is
 
 The backend defaults to `gpt-5.5` with `xhigh` reasoning. In a jj-backed repo, Fleet snapshots `jj @` before a batch and uses that exact commit as the worker base. Workers still use git worktrees for broad tool compatibility, and Fleet records the final jj snapshot after direct apply or reconciliation. Git/GitHub remain the publish layer; push to `main` after the final reconciled checkout is the state you want.
 
+## Publish
+
+Fleet treats GitHub as the trunk/publish layer, not as a branch per worker. After a local batch is reconciled and the checkout looks right, publish it explicitly:
+
+```sh
+codex-fleet publish -m "Apply fleet batch"
+```
+
+In a jj-backed repo this snapshots `jj @`, sets the `main` bookmark to that commit, and pushes `main` to `origin` with jj's remote safety checks. In a plain Git repo, publish requires a clean committed checkout and pushes `HEAD` to `origin/main`.
+
+Useful options:
+
+```sh
+codex-fleet publish --dry-run
+codex-fleet publish --remote origin --branch main -m "Ship UI cleanup"
+```
+
 ## Project Layout
 
 - `bin/codex-fleet`: launcher; defaults to the Ratatui UI.

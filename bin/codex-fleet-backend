@@ -505,6 +505,104 @@ def repo_is_clean(root: pathlib.Path) -> bool:
     return not result.stdout.strip()
 
 
+def print_process_output(result: subprocess.CompletedProcess[str]) -> None:
+    if result.stdout:
+        print(result.stdout, end="" if result.stdout.endswith("\n") else "\n")
+    if result.stderr:
+        print(result.stderr, end="" if result.stderr.endswith("\n") else "\n", file=sys.stderr)
+
+
+def command_publish(args: argparse.Namespace) -> int:
+    root = git_root()
+    remote = args.remote
+    branch = args.branch
+
+    jj_root_path = jj_repo_root(root)
+    if jj_root_path == root.resolve():
+        if args.message and not args.dry_run:
+            run_cmd(["jj", "describe", "-m", args.message], cwd=root)
+
+        snapshot = current_jj_snapshot(root, "publish")
+        if not snapshot:
+            raise FleetError("Could not snapshot jj @ before publish.")
+
+        description_value = (
+            args.message
+            if args.dry_run and args.message
+            else snapshot.get("jj_description")
+        )
+        description = str(description_value or "").strip()
+        if not description and not args.allow_empty_description:
+            raise FleetError(
+                "jj @ has an empty description. Publish with -m 'message' "
+                "or pass --allow-empty-description."
+            )
+
+        if args.dry_run:
+            if args.message:
+                print("Dry run: would set jj @ description before publishing.")
+            print(
+                "Dry run: would publish "
+                f"jj @ {snapshot.get('jj_change_id')} "
+                f"({str(snapshot.get('jj_commit_id') or '')[:12]}) "
+                f"to {remote}/{branch}."
+            )
+            print("Dry run did not describe @, move the local bookmark, or push.")
+            return 0
+
+        track = run_cmd(
+            ["jj", "bookmark", "track", branch, "--remote", remote],
+            cwd=root,
+            check=False,
+        )
+        print_process_output(track)
+
+        bookmark_cmd = ["jj", "bookmark", "set", branch, "-r", "@"]
+        if args.allow_backwards:
+            bookmark_cmd.append("--allow-backwards")
+        print_process_output(run_cmd(bookmark_cmd, cwd=root))
+
+        push_cmd = ["jj", "git", "push", "--remote", remote, "--bookmark", branch]
+        if args.allow_empty_description:
+            push_cmd.append("--allow-empty-description")
+        result = run_cmd(push_cmd, cwd=root, check=False)
+        print_process_output(result)
+        if result.returncode != 0:
+            raise FleetError(
+                f"Publish failed. If the remote changed, run `jj git fetch --remote {remote}` "
+                "and retry after resolving bookmark state."
+            )
+
+        print(
+            "Published "
+            f"jj @ {snapshot.get('jj_change_id')} "
+            f"({str(snapshot.get('jj_commit_id') or '')[:12]}) "
+            f"to {remote}/{branch}."
+        )
+        return 0
+
+    if not repo_is_clean(root):
+        raise FleetError(
+            "Git publish requires a clean committed checkout. In jj-backed repos Fleet can "
+            "publish the snapshotted @ commit directly; in plain Git, commit first and retry."
+        )
+
+    push_cmd = ["git", "push", remote, f"HEAD:{branch}"]
+    if args.allow_backwards:
+        push_cmd.insert(2, "--force-with-lease")
+    if args.dry_run:
+        push_cmd.insert(2, "--dry-run")
+    result = run_cmd(push_cmd, cwd=root, check=False)
+    print_process_output(result)
+    if result.returncode != 0:
+        raise FleetError(f"Git publish failed for {remote}/{branch}.")
+
+    action = "Would publish" if args.dry_run else "Published"
+    head = run_cmd(["git", "rev-parse", "--short=12", "HEAD"], cwd=root).stdout.strip()
+    print(f"{action} Git HEAD {head} to {remote}/{branch}.")
+    return 0
+
+
 def pid_alive(pid: int | None) -> bool:
     if not pid:
         return False
@@ -3624,6 +3722,23 @@ def build_parser() -> argparse.ArgumentParser:
     clean.add_argument("--run", help="run id; defaults to latest")
     clean.add_argument("-v", "--verbose", action="store_true")
     clean.set_defaults(func=command_clean)
+
+    publish = sub.add_parser("publish", help="publish the final local state to GitHub/trunk")
+    publish.add_argument("--remote", default="origin", help="remote to push; default: origin")
+    publish.add_argument("--branch", default="main", help="remote branch/bookmark to update; default: main")
+    publish.add_argument("-m", "--message", help="jj description to set on @ before publishing")
+    publish.add_argument(
+        "--allow-empty-description",
+        action="store_true",
+        help="allow jj commits with an empty description to be pushed",
+    )
+    publish.add_argument(
+        "--allow-backwards",
+        action="store_true",
+        help="allow moving the local jj bookmark backwards/sideways; Git uses --force-with-lease",
+    )
+    publish.add_argument("--dry-run", action="store_true", help="show what would be published")
+    publish.set_defaults(func=command_publish)
 
     doctor = sub.add_parser("doctor", help="check repo, state dir, codex, and git")
     doctor.set_defaults(func=command_doctor)

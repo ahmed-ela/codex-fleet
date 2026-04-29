@@ -137,6 +137,8 @@ impl App {
             "--auto-reconcile-when-idle".to_string(),
             "--auto-reconcile-delay".to_string(),
             "1".to_string(),
+            "--workspace-height".to_string(),
+            "7".to_string(),
             "-j".to_string(),
             DEFAULT_WORKERS.to_string(),
         ];
@@ -893,6 +895,11 @@ fn char_to_byte_index(value: &str, char_index: usize) -> usize {
 }
 
 fn render(frame: &mut Frame, app: &App) {
+    if app.workspace_mode {
+        render_workspace_control(frame, app);
+        return;
+    }
+
     let area = frame.area();
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -964,6 +971,136 @@ fn render(frame: &mut Frame, app: &App) {
     ]))
     .block(Block::default().borders(Borders::ALL));
     frame.render_widget(footer, chunks[3]);
+}
+
+fn render_workspace_control(frame: &mut Frame, app: &App) {
+    let area = frame.area();
+    let prompt_height = if area.height >= 5 { 3 } else { 1 };
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Min(0),
+            Constraint::Length(prompt_height),
+        ])
+        .split(area);
+
+    let status = Paragraph::new(workspace_status_line(app));
+    frame.render_widget(status, chunks[0]);
+
+    let job_text = workspace_job_lines(app, chunks[1].height as usize).join("\n");
+    frame.render_widget(Paragraph::new(job_text), chunks[1]);
+
+    let input_inner = if prompt_height >= 3 {
+        inner(chunks[2])
+    } else {
+        chunks[2]
+    };
+    let prompt = if prompt_height >= 3 {
+        Paragraph::new(app.input.as_str())
+            .block(Block::default().borders(Borders::ALL))
+            .wrap(Wrap { trim: false })
+    } else {
+        Paragraph::new(format!("> {}", app.input)).wrap(Wrap { trim: false })
+    };
+    frame.render_widget(prompt, chunks[2]);
+
+    if !app.done && !app.canceling {
+        frame.set_cursor_position(input_cursor_position(app, input_inner));
+    }
+}
+
+fn workspace_status_line(app: &App) -> String {
+    let running = app
+        .jobs
+        .iter()
+        .filter(|job| !is_terminal_status(&job.status))
+        .count();
+    let done = app
+        .jobs
+        .iter()
+        .filter(|job| job.status == "succeeded")
+        .count();
+    let failed = app.jobs.iter().filter(|job| job.status == "failed").count();
+    let mut parts = vec![
+        format!("Fleet {}", fleet_timer_text(app)),
+        format!("run {running}"),
+        format!("done {done}"),
+    ];
+    if failed > 0 {
+        parts.push(format!("fail {failed}"));
+    }
+    if !app.message_queue.is_empty() {
+        parts.push(format!("next {}", app.message_queue.len()));
+    }
+    if let Some(reconciler) = app.reconciler.as_ref() {
+        parts.push(format!(
+            "recon {} {}",
+            reconciler.status,
+            format_duration(reconciler_display_duration(reconciler))
+        ));
+    }
+    parts.push("Enter start | Tab later | Ctrl-C clear/cancel".to_string());
+    parts.join("  ")
+}
+
+fn workspace_job_lines(app: &App, max_lines: usize) -> Vec<String> {
+    if max_lines == 0 {
+        return Vec::new();
+    }
+
+    let mut lines = app
+        .jobs
+        .iter()
+        .enumerate()
+        .map(|(index, job)| {
+            let pane = workspace_pane_label(job);
+            format!(
+                "#{} {} {} {}",
+                index + 1,
+                job.status,
+                format_duration(job_display_duration(job)),
+                pane,
+            )
+            .trim_end()
+            .to_string()
+                + "  "
+                + &truncate_line(&job.title, 120)
+        })
+        .collect::<Vec<_>>();
+
+    if !app.message_queue.is_empty() {
+        lines.push(format!(
+            "next batch: {} message(s)",
+            app.message_queue.len()
+        ));
+    }
+    if let Some(reconciler) = app.reconciler.as_ref() {
+        lines.push(format!(
+            "R {} {} {}",
+            reconciler.status,
+            format_duration(reconciler_display_duration(reconciler)),
+            workspace_preview_pane_label(&reconciler.preview_lines).unwrap_or_default()
+        ));
+    }
+    if lines.is_empty() {
+        lines.push("ready".to_string());
+    }
+
+    let start = lines.len().saturating_sub(max_lines);
+    lines[start..].to_vec()
+}
+
+fn workspace_pane_label(job: &SubmittedJob) -> String {
+    workspace_preview_pane_label(&job.preview_lines)
+        .map(|pane| format!("[{pane}]"))
+        .unwrap_or_default()
+}
+
+fn workspace_preview_pane_label(lines: &[String]) -> Option<String> {
+    lines
+        .iter()
+        .find_map(|line| line.strip_prefix("pane ").map(str::to_string))
 }
 
 fn input_cursor_position(app: &App, input_inner: Rect) -> Position {
@@ -1220,20 +1357,11 @@ fn read_workspace_pane_preview(value: &Value) -> Vec<String> {
     let mut lines = Vec::new();
     if let Some(pane) = value.get("pane_id").and_then(Value::as_str) {
         if !pane.trim().is_empty() {
-            lines.push(format!("visible tmux pane: {pane}"));
+            lines.push(format!("pane {pane}"));
         }
     }
-    if let Some(worktree) = value.get("worktree").and_then(Value::as_str) {
-        lines.push(format!("worktree: {}", truncate_line(worktree, 180)));
-    }
-    if let Some(screen_path) = value.get("screen_path").and_then(Value::as_str) {
-        lines.push(format!(
-            "final capture: {}",
-            truncate_line(screen_path, 180)
-        ));
-    }
     if lines.is_empty() {
-        lines.push("waiting for visible tmux pane...".to_string());
+        lines.push("pane pending".to_string());
     }
     lines
 }

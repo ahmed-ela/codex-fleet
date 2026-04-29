@@ -1986,23 +1986,43 @@ def headful_close_pane(message: str, delay: float = 2.0) -> None:
         headful_tmux(["kill-pane", "-t", pane], check=False)
 
 
-def headful_spawn_pane(root: pathlib.Path, controller_pane: str, cmd: list[str]) -> str:
+def headful_workspace_height(args: argparse.Namespace) -> int:
+    return max(3, int(getattr(args, "workspace_height", 7) or 7))
+
+
+def headful_spawn_pane(
+    root: pathlib.Path,
+    controller_pane: str,
+    cmd: list[str],
+    split_target: str | None = None,
+    split_axis: str = "-h",
+    controller_height: int = 7,
+) -> str:
+    if split_target:
+        split_flag = split_axis if split_axis in {"-h", "-v"} else "-h"
+        split_args = [split_flag, "-d"]
+        target = split_target
+    else:
+        split_args = ["-v", "-b", "-d"]
+        target = controller_pane
     result = headful_tmux(
         [
             "split-window",
-            "-d",
+            *split_args,
             "-P",
             "-F",
             "#{pane_id}",
             "-t",
-            controller_pane,
+            target,
             "-c",
             str(root),
             shell_join(cmd),
         ]
     )
     pane = result.stdout.strip()
-    headful_tmux(["select-layout", "tiled"], check=False)
+    if controller_pane:
+        headful_tmux(["resize-pane", "-t", controller_pane, "-y", str(controller_height)], check=False)
+        headful_tmux(["select-pane", "-t", controller_pane], check=False)
     return pane
 
 
@@ -2830,7 +2850,22 @@ def headful_submit_prompt(
             archive_path.unlink()
         raise
     headful_event(run_dir, "headful_job_received", job_id=job_id, title=inferred_title)
-    pane = headful_spawn_pane(root, controller_pane, headful_worker_command(args, run_id, job_id))
+    current_workers = (current.get("workers") or {}).values()
+    visible_worker_panes = [
+        str(worker.get("pane_id"))
+        for worker in current_workers
+        if worker.get("pane_id")
+    ]
+    split_target = visible_worker_panes[-1] if visible_worker_panes else None
+    split_axis = "-h" if len(visible_worker_panes) % 2 == 1 else "-v"
+    pane = headful_spawn_pane(
+        root,
+        controller_pane,
+        headful_worker_command(args, run_id, job_id),
+        split_target=split_target,
+        split_axis=split_axis,
+        controller_height=headful_workspace_height(args),
+    )
 
     def update_pane(data: dict[str, Any]) -> None:
         data["workers"][job_id]["pane_id"] = pane
@@ -2935,7 +2970,12 @@ def headful_monitor_loop(
             state["phase"] = "reconciler_queued"
 
         lock_run_state(run_json, queue_reconciler)
-        pane = headful_spawn_pane(root, controller_pane, headful_reconciler_command(args, run_id))
+        pane = headful_spawn_pane(
+            root,
+            controller_pane,
+            headful_reconciler_command(args, run_id),
+            controller_height=headful_workspace_height(args),
+        )
 
         def record_pane(state: dict[str, Any]) -> None:
             state["reconciler"]["pane_id"] = pane
@@ -3384,6 +3424,7 @@ def build_parser() -> argparse.ArgumentParser:
     headful_controller.add_argument("--no-search", action="store_true")
     headful_controller.add_argument("--flush-queue", action="store_true")
     headful_controller.add_argument("--auto-reconcile-delay", type=float, default=5.0)
+    headful_controller.add_argument("--workspace-height", type=int, default=7)
     headful_controller.set_defaults(func=command_headful_controller)
 
     headful_worker = sub.add_parser("headful-worker", help=argparse.SUPPRESS)
@@ -3415,6 +3456,7 @@ def build_parser() -> argparse.ArgumentParser:
     headful_live.add_argument("--flush-queue", action="store_true")
     headful_live.add_argument("--auto-reconcile-when-idle", action="store_true")
     headful_live.add_argument("--auto-reconcile-delay", type=float, default=1.0)
+    headful_live.add_argument("--workspace-height", type=int, default=7)
     headful_live.set_defaults(func=lambda args: asyncio.run(run_headful_live(args)))
 
     live = sub.add_parser("live", help="stream prompts on stdin; each prompt starts a worker immediately")

@@ -19,6 +19,37 @@ Default interactive behavior:
 
 The backend defaults to `gpt-5.5` with `xhigh` reasoning and uses git worktrees for worker isolation.
 
+## Worker Prepare
+
+Before each worker starts Codex, `codex-fleet` runs deterministic prepare steps in that worker worktree. This keeps dependency setup out of the model prompt and logs setup time separately from model time.
+
+By default it auto-detects JavaScript package roots by walking for `package.json` with a lockfile, skipping generated folders such as `node_modules`, `.next`, `dist`, `build`, `target`, and `.venv`.
+
+Detected lockfiles map to:
+
+- `bun.lock` / `bun.lockb`: `bun install --frozen-lockfile`
+- `pnpm-lock.yaml`: `pnpm install --frozen-lockfile`
+- `package-lock.json` / `npm-shrinkwrap.json`: `npm ci`
+- `yarn.lock`: `yarn install --immutable` for Yarn 2+, otherwise `yarn install --frozen-lockfile`
+
+Prepared outputs are cached under `.codex-fleet/cache/prepare` by command and lockfile contents, then copied into each worker worktree. Prepare outputs are ignored when collecting worker diffs.
+
+Optional repo config can live at `.codex-fleet.toml`, `.codex-fleet/config.toml`, or `.codex-fleet/config.json`:
+
+```toml
+[prepare]
+auto = true
+
+[[prepare.steps]]
+name = "app"
+cwd = "apps/web"
+command = "bun install --frozen-lockfile"
+lockfiles = ["package.json", "bun.lock"]
+outputs = ["node_modules"]
+```
+
+Set `enabled = false` under `[prepare]` to disable prepare entirely, or `auto = false` to use only explicit steps.
+
 ## Build Ratatui Frontend
 
 ```sh

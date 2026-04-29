@@ -63,6 +63,7 @@ codex-fleet publish --remote origin --branch main -m "Ship UI cleanup"
 
 - `bin/codex-fleet`: launcher; defaults to the Ratatui UI.
 - `bin/codex-fleet-backend`: CLI orchestration, worker lifecycle, reconciliation, health, and cleanup commands.
+- `codex_fleet/jobs.py`: queue files, prompt capture splitting, job labels, ids, titles, and frontmatter helpers.
 - `codex_fleet/prepare.py`: deterministic worker worktree prepare/cache logic.
 - `tools/codex-fleet-tui`: Ratatui frontend.
 

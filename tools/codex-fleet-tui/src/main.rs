@@ -123,7 +123,7 @@ impl App {
     fn start_backend(&mut self, sender: Sender<BackendEvent>) {
         let backend = env::var("CODEX_FLEET_BACKEND")
             .unwrap_or_else(|_| "/Users/ahmedelamin/.dotfiles/bin/codex-fleet-backend".to_string());
-        let backend_mode = if inside_tmux() || tmux_available() {
+        let backend_mode = if inside_tmux() {
             "headful-live"
         } else {
             "live"
@@ -809,18 +809,6 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>) -> Result<()> {
                 _ => {}
             }
         }
-    }
-}
-
-fn tmux_available() -> bool {
-    match Command::new("tmux")
-        .arg("-V")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-    {
-        Ok(status) => status.success(),
-        Err(_) => false,
     }
 }
 

@@ -1,0 +1,140 @@
+diff --git a/frontend-react/src/features/decks/components/DeckResponsiveChrome.test.tsx b/frontend-react/src/features/decks/components/DeckResponsiveChrome.test.tsx
+index 25f3281..e1cec1e 100644
+--- a/frontend-react/src/features/decks/components/DeckResponsiveChrome.test.tsx
++++ b/frontend-react/src/features/decks/components/DeckResponsiveChrome.test.tsx
+@@ -1,5 +1,5 @@
+ import { render, screen, within } from "@testing-library/react";
+-import { BookOpen, Flame, Home, Plus } from "lucide-react";
++import { BookOpen, Flame, Home, Plus, Settings2 } from "lucide-react";
+ import { describe, expect, it, vi } from "vitest";
+ import { DeckMobileActionDock } from "./DeckResponsiveChrome";
+ 
+@@ -38,4 +38,33 @@ describe("DeckMobileActionDock", () => {
+     expect(addCardButton.querySelector("svg")).not.toBeNull();
+     expect(within(addCardButton).queryByText("Add card")).not.toBeInTheDocument();
+   });
++
++  it("renders deck home settings and Add deck as edge circles with empty middle space", () => {
++    render(
++      <DeckMobileActionDock
++        model={{
++          ariaLabel: "Deck actions",
++          actions: [
++            { id: "settings", label: "Settings", onClick: vi.fn(), icon: Settings2 },
++            { id: "add-deck", label: "Add deck", onClick: vi.fn(), icon: Plus },
++          ],
++        }}
++      />,
++    );
++
++    const toolbar = screen.getByRole("toolbar", { name: "Deck actions" });
++    expect(screen.queryByTestId("deck-mobile-action-pill")).not.toBeInTheDocument();
++    expect(screen.getByTestId("deck-mobile-empty-action-space")).toBeInTheDocument();
++
++    const settingsButton = within(screen.getByTestId("deck-mobile-leading-action")).getByRole("button", {
++      name: "Settings",
++    });
++    expect(settingsButton).toHaveClass("h-14", "w-14", "rounded-full");
++    expect(settingsButton.querySelector("svg")).not.toBeNull();
++    expect(within(settingsButton).queryByText("Settings")).not.toBeInTheDocument();
++
++    const addDeckButton = within(toolbar).getByRole("button", { name: "Add deck" });
++    expect(addDeckButton).toHaveClass("h-14", "w-14", "rounded-full");
++    expect(within(addDeckButton).queryByText("Add deck")).not.toBeInTheDocument();
++  });
+ });
+diff --git a/frontend-react/src/features/decks/components/DeckResponsiveChrome.tsx b/frontend-react/src/features/decks/components/DeckResponsiveChrome.tsx
+index a8f1d07..e6bcbe0 100644
+--- a/frontend-react/src/features/decks/components/DeckResponsiveChrome.tsx
++++ b/frontend-react/src/features/decks/components/DeckResponsiveChrome.tsx
+@@ -83,6 +83,7 @@ function DeckFloatingActionButton({
+   active = false,
+   disabled = false,
+   badge = null,
++  variant = "default",
+   onClick,
+ }: {
+   icon?: LucideIcon;
+@@ -90,11 +91,12 @@ function DeckFloatingActionButton({
+   active?: boolean;
+   disabled?: boolean;
+   badge?: string | null;
++  variant?: "default" | "outline" | "secondary";
+   onClick: () => void;
+ }) {
+   return (
+     <Button
+-      variant="default"
++      variant={variant}
+       size="icon"
+       className={cn(
+         "relative h-14 w-14 rounded-full shadow-lg shadow-slate-950/15",
+@@ -130,6 +132,47 @@ export function DeckMobileActionDock({
+     ? model.actions.filter((action) => action.id !== floatingAction.id)
+     : model.actions;
+   const toolbarLabel = model.ariaLabel ?? "Deck actions";
++  const leadingCircleAction =
++    floatingAction?.id === "add-deck" &&
++    toolbarActions.length === 1 &&
++    toolbarActions[0]?.id === "settings"
++      ? toolbarActions[0]
++      : null;
++
++  if (leadingCircleAction && floatingAction) {
++    return (
++      <div className="pointer-events-none fixed inset-x-0 bottom-0 z-[80] px-3 pb-[calc(12px+env(safe-area-inset-bottom))] pt-3 lg:hidden">
++        <div
++          role="toolbar"
++          aria-label={toolbarLabel}
++          className="pointer-events-none mx-auto grid max-w-[min(96vw,34rem)] grid-cols-[3.5rem_minmax(0,1fr)_3.5rem] items-center gap-2"
++        >
++          <div data-testid="deck-mobile-leading-action" className="pointer-events-auto justify-self-start">
++            <DeckFloatingActionButton
++              icon={leadingCircleAction.icon}
++              label={leadingCircleAction.label}
++              active={leadingCircleAction.active}
++              disabled={leadingCircleAction.disabled}
++              badge={formatActionBadge(leadingCircleAction.badge)}
++              variant={leadingCircleAction.active ? "secondary" : "outline"}
++              onClick={leadingCircleAction.onClick}
++            />
++          </div>
++          <div data-testid="deck-mobile-empty-action-space" aria-hidden="true" />
++          <div data-testid="deck-mobile-floating-action" className="pointer-events-auto justify-self-end">
++            <DeckFloatingActionButton
++              icon={floatingAction.icon}
++              label={floatingAction.label}
++              active={floatingAction.active}
++              disabled={floatingAction.disabled}
++              badge={formatActionBadge(floatingAction.badge)}
++              onClick={floatingAction.onClick}
++            />
++          </div>
++        </div>
++      </div>
++    );
++  }
+ 
+   return (
+     <div className="pointer-events-none fixed inset-x-0 bottom-0 z-[80] px-3 pb-[calc(12px+env(safe-area-inset-bottom))] pt-3 lg:hidden">
+diff --git a/frontend-react/src/features/decks/components/MainAppRoute.test.tsx b/frontend-react/src/features/decks/components/MainAppRoute.test.tsx
+index 8666dcf..3a4d4fa 100644
+--- a/frontend-react/src/features/decks/components/MainAppRoute.test.tsx
++++ b/frontend-react/src/features/decks/components/MainAppRoute.test.tsx
+@@ -540,9 +540,13 @@ describe('MainAppRoute', () => {
+ 
+     expect(await screen.findByRole('button', { name: 'Biology' })).toBeInTheDocument()
+     const mobileDock = screen.getByRole('toolbar', { name: 'Deck actions' })
+-    const actionPill = screen.getByTestId('deck-mobile-action-pill')
+-    expect(within(actionPill).getByRole('button', { name: 'Settings' })).toBeInTheDocument()
+-    expect(within(actionPill).queryByRole('button', { name: 'Add deck' })).not.toBeInTheDocument()
++    expect(screen.queryByTestId('deck-mobile-action-pill')).not.toBeInTheDocument()
++    expect(screen.getByTestId('deck-mobile-empty-action-space')).toBeInTheDocument()
++    const settingsButton = within(screen.getByTestId('deck-mobile-leading-action')).getByRole('button', {
++      name: 'Settings',
++    })
++    expect(settingsButton).toHaveClass('h-14', 'w-14', 'rounded-full')
++    expect(within(settingsButton).queryByText('Settings')).not.toBeInTheDocument()
+ 
+     const addDeckButton = within(mobileDock).getByRole('button', { name: 'Add deck' })
+     expect(addDeckButton).toHaveClass('h-14', 'w-14', 'rounded-full')

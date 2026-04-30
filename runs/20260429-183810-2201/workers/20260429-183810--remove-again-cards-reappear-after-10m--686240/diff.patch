@@ -1,0 +1,40 @@
+diff --git a/frontend-react/src/features/study/components/StudySchedulerSettingsPanel.test.tsx b/frontend-react/src/features/study/components/StudySchedulerSettingsPanel.test.tsx
+index ffafa0f..a472d3d 100644
+--- a/frontend-react/src/features/study/components/StudySchedulerSettingsPanel.test.tsx
++++ b/frontend-react/src/features/study/components/StudySchedulerSettingsPanel.test.tsx
+@@ -112,6 +112,7 @@ describe("StudySchedulerSettingsPanel", () => {
+ 
+     expect(screen.getByText("Again interval")).toBeInTheDocument();
+     expect(screen.getByLabelText("Again interval in minutes")).toBeInTheDocument();
++    expect(screen.queryByText(/Again cards reappear after/)).not.toBeInTheDocument();
+     expect(screen.queryByLabelText("Good interval in minutes")).not.toBeInTheDocument();
+     expect(screen.queryByLabelText("Desired retention percent")).not.toBeInTheDocument();
+     expect(screen.queryByText("Adaptive FSRS")).not.toBeInTheDocument();
+diff --git a/frontend-react/src/features/study/components/StudySchedulerSettingsPanel.tsx b/frontend-react/src/features/study/components/StudySchedulerSettingsPanel.tsx
+index e16c9cc..641fd94 100644
+--- a/frontend-react/src/features/study/components/StudySchedulerSettingsPanel.tsx
++++ b/frontend-react/src/features/study/components/StudySchedulerSettingsPanel.tsx
+@@ -149,7 +149,7 @@ export function StudySchedulerSettingsPanel({
+   const scheduleSummary =
+     !advancedSettingsEnabled
+       ? againValid
+-        ? `Again cards reappear after ${formatStudyInterval(parsedAgain)}.`
++        ? null
+         : "Use a whole number for the Again interval."
+       : againValid && goodValid && retentionValid
+       ? [
+@@ -173,9 +173,11 @@ export function StudySchedulerSettingsPanel({
+           <div className="text-base font-semibold tracking-tight text-foreground">
+             {advancedSettingsEnabled ? "FSRS schedule" : "Again interval"}
+           </div>
+-          <div className="mt-1 max-w-xl text-xs font-medium leading-relaxed text-muted-foreground">
+-            {scheduleSummary}
+-          </div>
++          {scheduleSummary ? (
++            <div className="mt-1 max-w-xl text-xs font-medium leading-relaxed text-muted-foreground">
++              {scheduleSummary}
++            </div>
++          ) : null}
+         </div>
+         <Button
+           variant="outline"

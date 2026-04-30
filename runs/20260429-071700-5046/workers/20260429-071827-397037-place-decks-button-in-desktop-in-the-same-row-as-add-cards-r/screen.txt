@@ -1,0 +1,24 @@
+
+• Updated Plan
+  └ ✔ Inspect deck desktop header model and tests
+    ✔ Patch deck-browser header to one unframed row
+    ✔ Update targeted component/route tests
+    ✔ Run focused checks
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• Implemented the assigned desktop header change.
+
+  Changed
+
+  - Desktop deck browser header now shows Decks with the logo inside the button, then Add deck, then the settings icon.
+  - Removed Add card from the deck browser desktop header.
+  - Removed the outer card/frame styling from DeckDesktopMenu.
+  - Updated tests for the new header behavior and Add deck modal opening.
+
+  Files Changed
+Token usage: total=99,643 input=85,070 (+ 1,831,552 cached) output=14,573 (reasoning 5,991)
+To continue this session, run codex resume 019dd8f6-372c-7693-9186-2f99381d35aa
+
+
+

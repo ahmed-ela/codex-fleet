@@ -1,0 +1,71 @@
+# Headful Codex screen capture
+
+This worker ran in the interactive Codex TUI. The final visible pane capture is below.
+
+```text
+
+• Ran curl -I --max-time 20 https://www.nocards.app
+  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0
+    HTTP/2 200
+    … +7 lines (ctrl + t to view transcript)
+    alt-svc: h3=":443"; ma=86400
+
+
+• Ran curl -I --max-time 20 http://nocards.app
+  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0
+    HTTP/1.1 308 Permanent Redirect
+    … +8 lines (ctrl + t to view transcript)
+    alt-svc: h3=":443"; ma=86400
+
+
+• Ran curl -I --max-time 20 https://nocards.app
+  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0
+    HTTP/2 200
+    … +7 lines (ctrl + t to view transcript)
+    alt-svc: h3=":443"; ma=86400
+
+
+• Ran git status --short --branch
+  └ ## codex/20260429-173259-mainapp-route-boundary...origin/codex/20260429-173259-mainapp-route-boundary
+
+• Ran curl -I --max-time 20 https://nocards.app/auth/callback
+  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0
+    HTTP/2 200
+    … +7 lines (ctrl + t to view transcript)
+    alt-svc: h3=":443"; ma=86400
+
+
+• Ran curl -I --max-time 20 https://simplecards.elaminahmed03.workers.dev
+  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0
+    HTTP/2 200
+    … +7 lines (ctrl + t to view transcript)
+    alt-svc: h3=":443"; ma=86400
+
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• Pushed and deployed.
+
+  Commit 946912f (Extract deck route and query hooks) is on origin/codex/20260429-173259-mainapp-route-boundary. I did not push to main.
+
+  Deploy completed through the guarded scripts:
+
+  - bun run deploy:check: passed dry run
+  - bun run deploy:prod: deployed Cloudflare version 0312b707-645d-4d32-bb25-12838cb3fc57
+
+  Verification:
+
+  - Pre-push hook passed lint, pure tests, integration tests, and build.
+  - https://nocards.app: 200
+  - http://nocards.app: 308 to HTTPS
+  - https://www.nocards.app: 200
+  - https://nocards.app/auth/callback: 200
+  - workers.dev URL: 200
+  - Git worktree is clean and tracking the pushed branch.
+
+
+› Run /review on my current changes
+
+  gpt-5.5 xhigh · ~/repos/projects/simplecards/.codex-fleet/worktrees/20260429-172823-4179/20260429-173259--did-we-apply-these-high-mainapproute-is-doing-too-mu--440072
+
+```

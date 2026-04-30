@@ -1,0 +1,1138 @@
+diff --git a/frontend-react/src/features/decks/components/MainAppRoute.test.tsx b/frontend-react/src/features/decks/components/MainAppRoute.test.tsx
+index 600c245..f3974f0 100644
+--- a/frontend-react/src/features/decks/components/MainAppRoute.test.tsx
++++ b/frontend-react/src/features/decks/components/MainAppRoute.test.tsx
+@@ -903,7 +903,7 @@ describe('MainAppRoute', () => {
+     expect(within(studyControls).getByText((_content, node) => node?.textContent === 'Done 0')).toBeInTheDocument()
+     expect(within(studyControls).queryByText((_content, node) => node?.textContent === 'Due 0')).not.toBeInTheDocument()
+     fireEvent.keyDown(studySurface, { key: ' ', code: 'Space' })
+-    fireEvent.click(within(studyControls).getByRole('button', { name: /^Good\b/ }))
++    fireEvent.click(within(studyControls).getByRole('button', { name: /^Right\b/ }))
+ 
+     expect(await screen.findByText('Done.')).toBeInTheDocument()
+     await waitFor(() => {
+@@ -943,7 +943,7 @@ describe('MainAppRoute', () => {
+     const studySurface = await screen.findByTestId('study-stage-surface')
+     const studyControls = screen.getByLabelText('Study controls')
+     fireEvent.keyDown(studySurface, { key: ' ', code: 'Space' })
+-    fireEvent.click(within(studyControls).getByRole('button', { name: /^Again\b/ }))
++    fireEvent.click(within(studyControls).getByRole('button', { name: /^Wrong\b/ }))
+ 
+     fireEvent.keyDown(window, { key: 'Escape', code: 'Escape' })
+ 
+@@ -1031,7 +1031,7 @@ describe('MainAppRoute', () => {
+     const studySurface = await screen.findByTestId('study-stage-surface')
+     const studyControls = screen.getByLabelText('Study controls')
+     fireEvent.keyDown(studySurface, { key: ' ', code: 'Space' })
+-    fireEvent.click(within(studyControls).getByRole('button', { name: /^Good\b/ }))
++    fireEvent.click(within(studyControls).getByRole('button', { name: /^Right\b/ }))
+ 
+     await waitFor(() => {
+       expect(
+@@ -1061,7 +1061,7 @@ describe('MainAppRoute', () => {
+     expectNoVisibleCountLabel('Due 0')
+   })
+ 
+-  it('shows study answer intervals from the saved scheduler settings', async () => {
++  it('keeps study answers as plain wrong and right actions even with saved scheduler settings', async () => {
+     process.env.SIMPLECARDS_ENABLE_STUDY_MODE = '1'
+     seedStore(
+       [
+@@ -1081,8 +1081,10 @@ describe('MainAppRoute', () => {
+     const studySurface = await screen.findByTestId('study-stage-surface')
+     fireEvent.keyDown(studySurface, { key: ' ', code: 'Space' })
+ 
+-    expect(screen.getByRole('button', { name: /^Again \(15m\)/ })).toBeInTheDocument()
+-    expect(screen.getByRole('button', { name: /^Good \(2d\)/ })).toBeInTheDocument()
++    expect(screen.getByRole('button', { name: /^Wrong\b/ })).toBeInTheDocument()
++    expect(screen.getByRole('button', { name: /^Right\b/ })).toBeInTheDocument()
++    expect(screen.queryByRole('button', { name: /15m/ })).not.toBeInTheDocument()
++    expect(screen.queryByRole('button', { name: /2d/ })).not.toBeInTheDocument()
+   })
+ 
+   it('shows Cram as the only study action in the selected deck header by default', async () => {
+@@ -1170,7 +1172,7 @@ describe('MainAppRoute', () => {
+     expect(within(studyControls).queryByText((_content, node) => node?.textContent === 'Due 0')).not.toBeInTheDocument()
+ 
+     fireEvent.keyDown(studySurface, { key: ' ', code: 'Space' })
+-    fireEvent.click(within(studyControls).getByRole('button', { name: /^Good\b/ }))
++    fireEvent.click(within(studyControls).getByRole('button', { name: /^Right\b/ }))
+ 
+     await act(async () => {
+       await new Promise((resolve) => setTimeout(resolve, STUDY_FEEDBACK_MS + 50))
+@@ -1486,7 +1488,7 @@ describe('MainAppRoute', () => {
+     expect(await within(studySurface).findByText('Imported question 1')).toBeInTheDocument()
+ 
+     fireEvent.keyDown(studySurface, { key: ' ', code: 'Space' })
+-    fireEvent.click(screen.getByRole('button', { name: /^Good\b/ }))
++    fireEvent.click(screen.getByRole('button', { name: /^Right\b/ }))
+ 
+     await act(async () => {
+       await new Promise((resolve) => setTimeout(resolve, STUDY_FEEDBACK_MS + 50))
+diff --git a/frontend-react/src/features/decks/components/MainAppRoute.tsx b/frontend-react/src/features/decks/components/MainAppRoute.tsx
+index 6bf4cbf..9e3178c 100644
+--- a/frontend-react/src/features/decks/components/MainAppRoute.tsx
++++ b/frontend-react/src/features/decks/components/MainAppRoute.tsx
+@@ -2993,8 +2993,7 @@ export function MainAppRoute({
+       </div>
+     ) : null;
+ 
+-  const compactSettingsRow = !advancedStudySettingsVisible && !ankiImportVisible;
+-  const studySettingsPanel = (
++  const studySettingsPanel = advancedStudySettingsVisible ? (
+     <StudySchedulerSettingsPanel
+       settings={schedulerSettings}
+       targetRetentionPercent={targetRetentionPercent}
+@@ -3005,11 +3004,10 @@ export function MainAppRoute({
+           ? adaptiveFsrsCalibrationState
+           : adaptiveFsrsShadowCalibrationState,
+       }}
+-      advancedSettingsEnabled={advancedStudySettingsVisible}
+       saving={savingStudySchedule}
+       onSave={saveStudySchedule}
+     />
+-  );
++  ) : null;
+ 
+   const deckScreenModel = useDeckScreenModel({
+     mode: routeMode,
+@@ -3268,14 +3266,7 @@ export function MainAppRoute({
+             </div>
+           </div>
+ 
+-          <div
+-            className={cn(
+-              "grid gap-3",
+-              compactSettingsRow
+-                ? "sm:grid-cols-[minmax(0,14rem)_minmax(0,1fr)] sm:items-stretch"
+-                : "sm:grid-cols-2",
+-            )}
+-          >
++          <div className="grid gap-3 sm:grid-cols-2">
+             <div className="hidden rounded-xl border border-border bg-card px-4 py-3 text-sm sm:block">
+               <div className="flex h-full flex-col gap-3">
+                 <div>
+@@ -3338,7 +3329,6 @@ export function MainAppRoute({
+                 </div>
+               </div>
+             ) : null}
+-            {compactSettingsRow ? studySettingsPanel : null}
+           </div>
+ 
+           {ankiImportVisible && ankiImportStatus ? (
+@@ -3354,7 +3344,7 @@ export function MainAppRoute({
+             </div>
+           ) : null}
+ 
+-          {compactSettingsRow ? null : studySettingsPanel}
++          {studySettingsPanel}
+         </div>
+       </Modal>
+ 
+diff --git a/frontend-react/src/features/study/components/StudyControls.test.tsx b/frontend-react/src/features/study/components/StudyControls.test.tsx
+index eed216d..7c79147 100644
+--- a/frontend-react/src/features/study/components/StudyControls.test.tsx
++++ b/frontend-react/src/features/study/components/StudyControls.test.tsx
+@@ -49,8 +49,6 @@ describe('StudyControls', () => {
+         mode="deck"
+         disabled={false}
+         flipped={true}
+-        wrongButtonText="Again (10m)"
+-        rightButtonText="Good (1d)"
+         cardTimeMeta="45s"
+         studyEstimateMeta="~3m left"
+         onWrong={onWrong}
+@@ -59,8 +57,8 @@ describe('StudyControls', () => {
+       />,
+     )
+ 
+-    fireEvent.click(screen.getByRole('button', { name: 'Again (10m) (H / ←)' }))
+-    fireEvent.click(screen.getByRole('button', { name: 'Good (1d) (Space / L / →)' }))
++    fireEvent.click(screen.getByRole('button', { name: 'Wrong (H / ←)' }))
++    fireEvent.click(screen.getByRole('button', { name: 'Right (Space / L / →)' }))
+     fireEvent.click(screen.getByLabelText('Edit'))
+ 
+     expect(screen.getByText('45s · ~3m left')).toBeInTheDocument()
+diff --git a/frontend-react/src/features/study/components/StudyControls.tsx b/frontend-react/src/features/study/components/StudyControls.tsx
+index 4f6107d..cf05072 100644
+--- a/frontend-react/src/features/study/components/StudyControls.tsx
++++ b/frontend-react/src/features/study/components/StudyControls.tsx
+@@ -12,13 +12,12 @@ import { cn } from "@/lib/utils";
+ const noop = () => {};
+ 
+ function compactReviewButtonLabel(label: string, fallback: string) {
+-  const interval = label.match(/\(([^)]+)\)/)?.[1]?.trim();
+-  if (interval) {
+-    return { primary: interval, secondary: null as string | null };
++  if (/^right$/i.test(label.trim())) {
++    return { primary: "✓", secondary: null as string | null };
+   }
+ 
+-  if (/^good$/i.test(label.trim())) {
+-    return { primary: "✓", secondary: "Cram" };
++  if (/^wrong$/i.test(label.trim())) {
++    return { primary: "×", secondary: null as string | null };
+   }
+ 
+   return { primary: fallback, secondary: null as string | null };
+@@ -45,8 +44,8 @@ export function StudyControls({
+   locked = false,
+   hideAnswerActions = false,
+   showReviewSummary = true,
+-  wrongButtonText = "Again",
+-  rightButtonText = "Good",
++  wrongButtonText = "Wrong",
++  rightButtonText = "Right",
+ }: {
+   mode?: "deck" | "single";
+   disabled: boolean;
+@@ -73,7 +72,7 @@ export function StudyControls({
+ }) {
+   const controlsDisabled = disabled || locked;
+   const lockedDisabledClassName = locked && !disabled ? "disabled:!opacity-100" : null;
+-  const compactWrongLabel = compactReviewButtonLabel(wrongButtonText, "↺");
++  const compactWrongLabel = compactReviewButtonLabel(wrongButtonText, "×");
+   const compactRightLabel = compactReviewButtonLabel(rightButtonText, "✓");
+   const deckCenterHasMeta = Boolean(cardTimeMeta || studyEstimateMeta);
+   const deckCenterHasVisibleContent =
+diff --git a/frontend-react/src/features/study/components/StudyDeckOverlay.test.tsx b/frontend-react/src/features/study/components/StudyDeckOverlay.test.tsx
+index a5a1589..8abc839 100644
+--- a/frontend-react/src/features/study/components/StudyDeckOverlay.test.tsx
++++ b/frontend-react/src/features/study/components/StudyDeckOverlay.test.tsx
+@@ -146,7 +146,7 @@ afterEach(() => {
+ })
+ 
+ describe('StudyDeckOverlay', () => {
+-  it('restarts a chain from the root after an again answer on a child step', async () => {
++  it('restarts a chain from the root after a wrong answer on a child step', async () => {
+     render(
+       <StudyDeckOverlay
+         title="Biology"
+@@ -176,7 +176,7 @@ describe('StudyDeckOverlay', () => {
+     expect(screen.getByText('Question 1')).toBeInTheDocument()
+ 
+     fireEvent.keyDown(surface, { key: ' ', code: 'Space' })
+-    fireEvent.click(screen.getByRole('button', { name: /^Good\b/ }))
++    fireEvent.click(screen.getByRole('button', { name: /^Right\b/ }))
+ 
+     await act(async () => {
+       await new Promise((resolve) => setTimeout(resolve, STUDY_FEEDBACK_MS + 20))
+@@ -185,7 +185,7 @@ describe('StudyDeckOverlay', () => {
+     expect(await screen.findByText('Question 2')).toBeInTheDocument()
+ 
+     fireEvent.keyDown(surface, { key: ' ', code: 'Space' })
+-    fireEvent.click(screen.getByRole('button', { name: /^Again\b/ }))
++    fireEvent.click(screen.getByRole('button', { name: /^Wrong\b/ }))
+ 
+     await act(async () => {
+       await new Promise((resolve) => setTimeout(resolve, STUDY_FEEDBACK_MS + 20))
+@@ -231,13 +231,13 @@ describe('StudyDeckOverlay', () => {
+     expect(screen.queryByText(textContentEquals('New 1'))).not.toBeInTheDocument()
+     expect(screen.queryByText(textContentEquals('Done 0'))).not.toBeInTheDocument()
+     expect(screen.queryByText(textContentEquals('Due 0'))).not.toBeInTheDocument()
+-    expect(screen.getByRole('button', { name: /^Again\b/ })).toBeInTheDocument()
+-    expect(screen.getByRole('button', { name: /^Good\b/ })).toBeInTheDocument()
++    expect(screen.getByRole('button', { name: /^Wrong\b/ })).toBeInTheDocument()
++    expect(screen.getByRole('button', { name: /^Right\b/ })).toBeInTheDocument()
+     expect(screen.queryByText('Revealed')).not.toBeInTheDocument()
+     expect(screen.queryAllByTestId('occlusion-cover')).toHaveLength(0)
+   })
+ 
+-  it('uses Space to reveal first and then mark Good on the back side', async () => {
++  it('uses Space to reveal first and then mark Right on the back side', async () => {
+     render(
+       <StudyDeckOverlay
+         title="Biology"
+@@ -264,7 +264,7 @@ describe('StudyDeckOverlay', () => {
+     })
+ 
+     expect(screen.getByText('Answer 1')).toBeInTheDocument()
+-    expect(screen.getByRole('button', { name: /^Good\b/ })).toBeInTheDocument()
++    expect(screen.getByRole('button', { name: /^Right\b/ })).toBeInTheDocument()
+ 
+     await act(async () => {
+       fireEvent.keyDown(screen.getByTestId('study-stage-surface'), { key: ' ', code: 'Space' })
+@@ -305,8 +305,8 @@ describe('StudyDeckOverlay', () => {
+ 
+     fireEvent.keyDown(await screen.findByTestId('study-stage-surface'), { key: ' ', code: 'Space' })
+ 
+-    expect(screen.queryByRole('button', { name: /^Again\b/ })).not.toBeInTheDocument()
+-    expect(screen.queryByRole('button', { name: /^Good\b/ })).not.toBeInTheDocument()
++    expect(screen.queryByRole('button', { name: /^Wrong\b/ })).not.toBeInTheDocument()
++    expect(screen.queryByRole('button', { name: /^Right\b/ })).not.toBeInTheDocument()
+   })
+ 
+   it('keeps answer controls and edit visually stable during answer feedback', async () => {
+@@ -330,13 +330,13 @@ describe('StudyDeckOverlay', () => {
+ 
+     const surface = await screen.findByTestId('study-stage-surface')
+     fireEvent.keyDown(surface, { key: ' ', code: 'Space' })
+-    fireEvent.click(screen.getByRole('button', { name: /^Good\b/ }))
++    fireEvent.click(screen.getByRole('button', { name: /^Right\b/ }))
+ 
+     expect(screen.getByTestId('study-card-shell')).toHaveAttribute('data-answer-feedback', 'right')
+ 
+     const editButton = screen.getByRole('button', { name: 'Edit' })
+-    const wrongButton = screen.getByRole('button', { name: /^Again\b/ })
+-    const goodButton = screen.getByRole('button', { name: /^Good\b/ })
++    const wrongButton = screen.getByRole('button', { name: /^Wrong\b/ })
++    const goodButton = screen.getByRole('button', { name: /^Right\b/ })
+ 
+     expect(editButton).toBeInTheDocument()
+     expect(editButton).toBeDisabled()
+@@ -418,7 +418,7 @@ describe('StudyDeckOverlay', () => {
+ 
+     fireEvent.keyDown(surface, { key: ' ', code: 'Space' })
+     expect(await screen.findByText('Answer 1')).toBeInTheDocument()
+-    expect(screen.getByRole('button', { name: /^Good\b/ })).toBeInTheDocument()
++    expect(screen.getByRole('button', { name: /^Right\b/ })).toBeInTheDocument()
+ 
+     fireEvent.keyDown(surface, { key: 'z', code: 'KeyZ', metaKey: true })
+ 
+@@ -527,7 +527,7 @@ describe('StudyDeckOverlay', () => {
+     expect(await screen.findByText('Question 1')).toBeInTheDocument()
+ 
+     fireEvent.keyDown(screen.getByTestId('study-stage-surface'), { key: ' ', code: 'Space' })
+-    fireEvent.click(screen.getByRole('button', { name: /^Good\b/ }))
++    fireEvent.click(screen.getByRole('button', { name: /^Right\b/ }))
+ 
+     expect(screen.getByTestId('study-card-shell')).toHaveAttribute('data-answer-feedback', 'right')
+     expect(screen.queryByText(textContentEquals('Learn 0'))).not.toBeInTheDocument()
+@@ -544,7 +544,7 @@ describe('StudyDeckOverlay', () => {
+     expect(screen.getByText('Question 2')).toBeInTheDocument()
+   })
+ 
+-  it('updates study counts immediately while a good answer is pending', async () => {
++  it('updates study counts immediately while a right answer is pending', async () => {
+     render(
+       <StudyDeckOverlay
+         title="Biology"
+@@ -573,7 +573,7 @@ describe('StudyDeckOverlay', () => {
+     expect(screen.queryByText(textContentEquals('New 2'))).not.toBeInTheDocument()
+   })
+ 
+-  it('updates cram counts immediately while an again answer is pending', async () => {
++  it('updates cram counts immediately while a wrong answer is pending', async () => {
+     render(
+       <StudyDeckOverlay
+         studyMode="cram"
+@@ -739,13 +739,13 @@ describe('StudyDeckOverlay', () => {
+     expect(screen.queryByText(textContentEquals('Due 1'))).not.toBeInTheDocument()
+   })
+ 
+-  it('splits remaining cards into learning and unseen when the again interval repeats in the current session', async () => {
++  it('queues a wrong card after the remaining deck in the current session', async () => {
+     render(
+       <StudyDeckOverlay
+         title="Biology"
+         sessionKey="study-3"
+         editorDeckId="tag-1"
+-        schedulerSettings={{ againIntervalMinutes: 0, goodIntervalMinutes: 1440 }}
++        schedulerSettings={{ againIntervalMinutes: 10, goodIntervalMinutes: 1440 }}
+         decks={[]}
+         cards={[buildCard('card-1', 'Question 1', 'Answer 1'), buildCard('card-2', 'Question 2', 'Answer 2')]}
+         onEnsureDeck={vi.fn(async (name: string) => ({
+@@ -762,7 +762,7 @@ describe('StudyDeckOverlay', () => {
+     expect(await screen.findByText('Question 1')).toBeInTheDocument()
+ 
+     fireEvent.keyDown(screen.getByTestId('study-stage-surface'), { key: ' ', code: 'Space' })
+-    fireEvent.click(screen.getByRole('button', { name: /^Again\b/ }))
++    fireEvent.click(screen.getByRole('button', { name: /^Wrong\b/ }))
+ 
+     await act(async () => {
+       await new Promise((resolve) => setTimeout(resolve, STUDY_FEEDBACK_MS + 20))
+@@ -771,9 +771,18 @@ describe('StudyDeckOverlay', () => {
+     expect(screen.getByText(textContentEquals('Learn 1'))).toBeInTheDocument()
+     expect(screen.getByText(textContentEquals('New 1'))).toBeInTheDocument()
+     expect(await screen.findByText('Question 2')).toBeInTheDocument()
++
++    fireEvent.keyDown(screen.getByTestId('study-stage-surface'), { key: ' ', code: 'Space' })
++    fireEvent.click(screen.getByRole('button', { name: /^Right\b/ }))
++
++    await act(async () => {
++      await new Promise((resolve) => setTimeout(resolve, STUDY_FEEDBACK_MS + 20))
++    })
++
++    expect(await screen.findByText('Question 1')).toBeInTheDocument()
+   })
+ 
+-  it('does not repeat a wrong card in the current session when the again interval is above zero', async () => {
++  it('replays multiple wrong cards in their original wrong-answer order', async () => {
+     render(
+       <StudyDeckOverlay
+         title="Biology"
+@@ -781,7 +790,11 @@ describe('StudyDeckOverlay', () => {
+         editorDeckId="tag-1"
+         schedulerSettings={{ againIntervalMinutes: 10, goodIntervalMinutes: 1440 }}
+         decks={[]}
+-        cards={[buildCard('card-1', 'Question 1', 'Answer 1'), buildCard('card-2', 'Question 2', 'Answer 2')]}
++        cards={[
++          buildCard('card-1', 'Question 1', 'Answer 1'),
++          buildCard('card-2', 'Question 2', 'Answer 2'),
++          buildCard('card-3', 'Question 3', 'Answer 3'),
++        ]}
+         onEnsureDeck={vi.fn(async (name: string) => ({
+           id: 'tag-1',
+           name,
+@@ -794,20 +807,41 @@ describe('StudyDeckOverlay', () => {
+     )
+ 
+     expect(await screen.findByText('Question 1')).toBeInTheDocument()
++    fireEvent.keyDown(screen.getByTestId('study-stage-surface'), { key: ' ', code: 'Space' })
++    fireEvent.click(screen.getByRole('button', { name: /^Wrong\b/ }))
+ 
++    await act(async () => {
++      await new Promise((resolve) => setTimeout(resolve, STUDY_FEEDBACK_MS + 20))
++    })
++
++    expect(await screen.findByText('Question 2')).toBeInTheDocument()
+     fireEvent.keyDown(screen.getByTestId('study-stage-surface'), { key: ' ', code: 'Space' })
+-    fireEvent.click(screen.getByRole('button', { name: /^Again\b/ }))
++    fireEvent.click(screen.getByRole('button', { name: /^Wrong\b/ }))
++
++    await act(async () => {
++      await new Promise((resolve) => setTimeout(resolve, STUDY_FEEDBACK_MS + 20))
++    })
++
++    expect(await screen.findByText('Question 3')).toBeInTheDocument()
++    fireEvent.keyDown(screen.getByTestId('study-stage-surface'), { key: ' ', code: 'Space' })
++    fireEvent.click(screen.getByRole('button', { name: /^Right\b/ }))
++
++    await act(async () => {
++      await new Promise((resolve) => setTimeout(resolve, STUDY_FEEDBACK_MS + 20))
++    })
++
++    expect(await screen.findByText('Question 1')).toBeInTheDocument()
++    fireEvent.keyDown(screen.getByTestId('study-stage-surface'), { key: ' ', code: 'Space' })
++    fireEvent.click(screen.getByRole('button', { name: /^Right\b/ }))
+ 
+     await act(async () => {
+       await new Promise((resolve) => setTimeout(resolve, STUDY_FEEDBACK_MS + 20))
+     })
+ 
+-    expect(screen.getByText(textContentEquals('Learn 0'))).toBeInTheDocument()
+-    expect(screen.getByText(textContentEquals('New 1'))).toBeInTheDocument()
+     expect(await screen.findByText('Question 2')).toBeInTheDocument()
+   })
+ 
+-  it('shows truthful again and good intervals from the active scheduler settings', async () => {
++  it('keeps review actions as plain wrong and right labels when scheduler settings have intervals', async () => {
+     render(
+       <StudyDeckOverlay
+         title="Biology"
+@@ -831,8 +865,10 @@ describe('StudyDeckOverlay', () => {
+ 
+     fireEvent.keyDown(screen.getByTestId('study-stage-surface'), { key: ' ', code: 'Space' })
+ 
+-    expect(screen.getByRole('button', { name: /^Again \(15m\)/ })).toBeInTheDocument()
+-    expect(screen.getByRole('button', { name: /^Good \(2d\)/ })).toBeInTheDocument()
++    expect(screen.getByRole('button', { name: /^Wrong\b/ })).toBeInTheDocument()
++    expect(screen.getByRole('button', { name: /^Right\b/ })).toBeInTheDocument()
++    expect(screen.queryByRole('button', { name: /15m/ })).not.toBeInTheDocument()
++    expect(screen.queryByRole('button', { name: /2d/ })).not.toBeInTheDocument()
+   })
+ 
+   it('uses cram-session counts instead of borrowed deck review counts', async () => {
+@@ -865,10 +901,10 @@ describe('StudyDeckOverlay', () => {
+     expect(screen.queryByText(textContentEquals('Due 0'))).not.toBeInTheDocument()
+ 
+     fireEvent.keyDown(screen.getByTestId('study-stage-surface'), { key: ' ', code: 'Space' })
+-    expect(screen.getByRole('button', { name: /^Again\b/ })).toHaveAttribute('title', 'Again (10m)')
+-    expect(screen.getByRole('button', { name: /^Good\b/ })).toHaveAttribute('title', 'Good')
++    expect(screen.getByRole('button', { name: /^Wrong\b/ })).toHaveAttribute('title', 'Wrong')
++    expect(screen.getByRole('button', { name: /^Right\b/ })).toHaveAttribute('title', 'Right')
+ 
+-    fireEvent.click(screen.getByRole('button', { name: /^Good\b/ }))
++    fireEvent.click(screen.getByRole('button', { name: /^Right\b/ }))
+ 
+     await act(async () => {
+       await new Promise((resolve) => setTimeout(resolve, STUDY_FEEDBACK_MS + 20))
+@@ -884,7 +920,7 @@ describe('StudyDeckOverlay', () => {
+     expect(screen.queryByText(textContentEquals('Due 0'))).not.toBeInTheDocument()
+   })
+ 
+-  it('cancels a pending good answer with Cmd+Z before the card advances', async () => {
++  it('cancels a pending right answer with Cmd+Z before the card advances', async () => {
+     const onRecordAnswer = vi.fn()
+     const onUndoAnswer = vi.fn()
+ 
+@@ -911,7 +947,7 @@ describe('StudyDeckOverlay', () => {
+     expect(await screen.findByText('Question 1')).toBeInTheDocument()
+ 
+     fireEvent.keyDown(screen.getByTestId('study-stage-surface'), { key: ' ', code: 'Space' })
+-    fireEvent.click(screen.getByRole('button', { name: /^Good\b/ }))
++    fireEvent.click(screen.getByRole('button', { name: /^Right\b/ }))
+     expect(screen.getByTestId('study-card-shell')).toHaveAttribute('data-answer-feedback', 'right')
+ 
+     fireEvent.keyDown(window, { key: 'z', code: 'KeyZ', metaKey: true })
+@@ -932,7 +968,7 @@ describe('StudyDeckOverlay', () => {
+     expect(screen.queryByText('Question 2')).not.toBeInTheDocument()
+   })
+ 
+-  it('undoes a committed good answer with Cmd+Z in cram mode', async () => {
++  it('undoes a committed right answer with Cmd+Z in cram mode', async () => {
+     const onRecordAnswer = vi.fn()
+     const onUndoAnswer = vi.fn()
+ 
+@@ -960,7 +996,7 @@ describe('StudyDeckOverlay', () => {
+     expect(await screen.findByText('Question 1')).toBeInTheDocument()
+ 
+     fireEvent.keyDown(screen.getByTestId('study-stage-surface'), { key: ' ', code: 'Space' })
+-    fireEvent.click(screen.getByRole('button', { name: /^Good\b/ }))
++    fireEvent.click(screen.getByRole('button', { name: /^Right\b/ }))
+ 
+     await act(async () => {
+       await new Promise((resolve) => setTimeout(resolve, STUDY_FEEDBACK_MS + 20))
+@@ -986,7 +1022,7 @@ describe('StudyDeckOverlay', () => {
+     expect(screen.getByText('Answer 1')).toBeInTheDocument()
+   })
+ 
+-  it('undoes a committed good answer with Cmd+Z from the done screen', async () => {
++  it('undoes a committed right answer with Cmd+Z from the done screen', async () => {
+     const onUndoAnswer = vi.fn()
+ 
+     render(
+@@ -1011,7 +1047,7 @@ describe('StudyDeckOverlay', () => {
+     expect(await screen.findByText('Question 1')).toBeInTheDocument()
+ 
+     fireEvent.keyDown(screen.getByTestId('study-stage-surface'), { key: ' ', code: 'Space' })
+-    fireEvent.click(screen.getByRole('button', { name: /^Good\b/ }))
++    fireEvent.click(screen.getByRole('button', { name: /^Right\b/ }))
+ 
+     expect(await screen.findByText('Done.')).toBeInTheDocument()
+ 
+@@ -1027,7 +1063,7 @@ describe('StudyDeckOverlay', () => {
+     expect(screen.getByText('Answer 1')).toBeInTheDocument()
+   })
+ 
+-  it('delays wrong cards inside cram mode using the normal again interval', async () => {
++  it('queues wrong cards inside cram mode after the remaining deck', async () => {
+     render(
+       <StudyDeckOverlay
+         studyMode="cram"
+@@ -1051,7 +1087,7 @@ describe('StudyDeckOverlay', () => {
+     expect(await screen.findByText('Question 1')).toBeInTheDocument()
+ 
+     fireEvent.keyDown(screen.getByTestId('study-stage-surface'), { key: ' ', code: 'Space' })
+-    fireEvent.click(screen.getByRole('button', { name: /^Again\b/ }))
++    fireEvent.click(screen.getByRole('button', { name: /^Wrong\b/ }))
+ 
+     await act(async () => {
+       await new Promise((resolve) => setTimeout(resolve, STUDY_FEEDBACK_MS + 20))
+@@ -1062,16 +1098,16 @@ describe('StudyDeckOverlay', () => {
+     expect(await screen.findByText('Question 2')).toBeInTheDocument()
+ 
+     fireEvent.keyDown(screen.getByTestId('study-stage-surface'), { key: ' ', code: 'Space' })
+-    fireEvent.click(screen.getByRole('button', { name: /^Good\b/ }))
++    fireEvent.click(screen.getByRole('button', { name: /^Right\b/ }))
+ 
+     await act(async () => {
+       await new Promise((resolve) => setTimeout(resolve, STUDY_FEEDBACK_MS + 20))
+     })
+ 
+-    expect(screen.queryByText('Question 1')).not.toBeInTheDocument()
++    expect(await screen.findByText('Question 1')).toBeInTheDocument()
+   })
+ 
+-  it('migrates an already-saved cram repeat into the again interval and resumes it when due', async () => {
++  it('requeues an already-saved delayed cram repeat immediately', async () => {
+     storageBacking.set('simplecards.studySessions.local', JSON.stringify({
+       bySessionKey: {
+         'cram-existing-progress': {
+@@ -1079,9 +1115,10 @@ describe('StudyDeckOverlay', () => {
+           updatedAt: '2020-01-01T00:00:00.000Z',
+           id: 'saved-cram-session',
+           startedAt: '2020-01-01T00:00:00.000Z',
+-          queueIds: ['card-1', 'card-2', 'card-1'],
++          queueIds: ['card-1', 'card-2'],
+           index: 2,
+           flipped: false,
++          delayedRepeats: [{ cardId: 'card-1', dueAt: '2030-01-01T00:00:00.000Z' }],
+         },
+       },
+     }))
+@@ -1410,7 +1447,7 @@ describe('StudyDeckOverlay', () => {
+     await waitFor(() => expect(getCardsByIdsMock).toHaveBeenCalledWith(['card-2']))
+ 
+     fireEvent.keyDown(screen.getByTestId('study-stage-surface'), { key: ' ', code: 'Space' })
+-    fireEvent.click(screen.getByRole('button', { name: /^Good\b/ }))
++    fireEvent.click(screen.getByRole('button', { name: /^Right\b/ }))
+ 
+     await act(async () => {
+       await new Promise((resolve) => setTimeout(resolve, STUDY_FEEDBACK_MS + 50))
+@@ -1476,7 +1513,7 @@ describe('StudyDeckOverlay', () => {
+     })
+ 
+     fireEvent.keyDown(screen.getByTestId('study-stage-surface'), { key: ' ', code: 'Space' })
+-    fireEvent.click(screen.getByRole('button', { name: /^Good\b/ }))
++    fireEvent.click(screen.getByRole('button', { name: /^Right\b/ }))
+ 
+     await act(async () => {
+       await new Promise((resolve) => setTimeout(resolve, STUDY_FEEDBACK_MS + 20))
+@@ -1534,7 +1571,7 @@ describe('StudyDeckOverlay', () => {
+     expect(screen.queryByText(textContentEquals('Due 1'))).not.toBeInTheDocument()
+ 
+     fireEvent.keyDown(screen.getByTestId('study-stage-surface'), { key: ' ', code: 'Space' })
+-    fireEvent.click(screen.getByRole('button', { name: /^Good\b/ }))
++    fireEvent.click(screen.getByRole('button', { name: /^Right\b/ }))
+ 
+     await act(async () => {
+       await new Promise((resolve) => setTimeout(resolve, STUDY_FEEDBACK_MS + 20))
+@@ -1593,7 +1630,7 @@ describe('StudyDeckOverlay', () => {
+     expect(screen.getByText(textContentEquals('New 2'))).toBeInTheDocument()
+ 
+     fireEvent.keyDown(screen.getByTestId('study-stage-surface'), { key: ' ', code: 'Space' })
+-    fireEvent.click(screen.getByRole('button', { name: /^Good\b/ }))
++    fireEvent.click(screen.getByRole('button', { name: /^Right\b/ }))
+ 
+     await act(async () => {
+       await new Promise((resolve) => setTimeout(resolve, STUDY_FEEDBACK_MS + 20))
+@@ -1661,7 +1698,7 @@ describe('StudyDeckOverlay', () => {
+     expect(screen.queryByText('Continue saved session?')).not.toBeInTheDocument()
+ 
+     fireEvent.keyDown(screen.getByTestId('study-stage-surface'), { key: ' ', code: 'Space' })
+-    fireEvent.click(screen.getByRole('button', { name: /^Good\b/ }))
++    fireEvent.click(screen.getByRole('button', { name: /^Right\b/ }))
+ 
+     await act(async () => {
+       await new Promise((resolve) => setTimeout(resolve, STUDY_FEEDBACK_MS + 50))
+diff --git a/frontend-react/src/features/study/components/StudyDeckOverlay.tsx b/frontend-react/src/features/study/components/StudyDeckOverlay.tsx
+index b6d7b4e..95fcbcb 100644
+--- a/frontend-react/src/features/study/components/StudyDeckOverlay.tsx
++++ b/frontend-react/src/features/study/components/StudyDeckOverlay.tsx
+@@ -14,30 +14,25 @@ import { STUDY_FEEDBACK_MS } from "@/features/study/lib/feedbackTiming";
+ import {
+   DEFAULT_AGAIN_INTERVAL_MINUTES,
+   DEFAULT_ADAPTIVE_FSRS_ENABLED,
+-  deriveAdaptiveFsrsCalibrationState,
+   DEFAULT_GOOD_INTERVAL_MINUTES,
+   DEFAULT_TARGET_RETENTION_PERCENT,
+-  formatStudyInterval,
+   type BinaryStudyResult,
+   type BinaryStudyScheduleSettings,
+   type CardReviewStateSnapshot,
+-  getBinaryReviewIntervalMinutes,
+   normalizeBinaryStudyScheduleSettings,
+ } from "@/features/study/lib/reviewScheduler";
+ import { api } from "@/lib/api";
+ import { contentToSafeHtml } from "@/lib/richText";
+ import {
+   createStudySession,
+-  delaySeenQueuedRepeats,
+   flipCard,
+   getCurrentCard,
+-  getNextDelayedRepeat,
+   getRemainingStudyCounts,
+   hydrateStudySession,
+   isDone,
+   markCardRight,
+   markCardWrong,
+-  promoteDueStudyRepeats,
++  requeueDelayedStudyRepeats,
+   reconcileCardInStudySession,
+   serializeStudySession,
+   type StudySession,
+@@ -83,19 +78,6 @@ const DEFAULT_STUDY_SCHEDULER_SETTINGS = {
+   adaptiveFsrsEnabled: DEFAULT_ADAPTIVE_FSRS_ENABLED,
+ } satisfies BinaryStudyScheduleSettings;
+ 
+-function addMinutesIso(baseIso: string, minutes: number) {
+-  const baseMs = Date.parse(baseIso);
+-  const normalizedBase = Number.isFinite(baseMs) ? baseMs : Date.now();
+-  return new Date(normalizedBase + Math.max(0, minutes) * 60_000).toISOString();
+-}
+-
+-function formatDelayedRepeatWait(dueAt: string, nowMs: number) {
+-  const dueAtMs = Date.parse(dueAt);
+-  if (!Number.isFinite(dueAtMs)) return "soon";
+-  const remainingMinutes = Math.max(0, Math.ceil((dueAtMs - nowMs) / 60_000));
+-  return formatStudyInterval(remainingMinutes);
+-}
+-
+ function useDeckMobileViewport() {
+   const [mobile, setMobile] = React.useState(false);
+ 
+@@ -658,37 +640,15 @@ export function StudyDeckOverlay({
+     () => new Map(decks.map((deck) => [deck.id, deck.name] as const)),
+     [decks],
+   );
+-  const cramAgainIntervalMinutes = effectiveSchedulerSettings.againIntervalMinutes;
+-  const normalizeLoadedCramSession = React.useCallback(
+-    (loaded: StudySession, savedUpdatedAt?: string | null) => {
+-      let next = promoteDueStudyRepeats(loaded);
+-      if (!cramMode || cramAgainIntervalMinutes <= 0) return next;
+-
+-      const wrongReviewByCardId = new Map<string, string>();
+-      for (const log of reviewLogs) {
+-        if (log.mode !== "cram" || log.result !== "wrong") continue;
+-        if (log.sessionId && log.sessionId !== next.id) continue;
+-        const reviewedAtMs = Date.parse(log.reviewedAt);
+-        if (!Number.isFinite(reviewedAtMs)) continue;
+-        const previous = wrongReviewByCardId.get(log.cardId);
+-        if (!previous || reviewedAtMs > Date.parse(previous)) {
+-          wrongReviewByCardId.set(log.cardId, log.reviewedAt);
+-        }
+-      }
+-
+-      next = delaySeenQueuedRepeats(next, (cardId) => {
+-        const base = wrongReviewByCardId.get(cardId) ?? savedUpdatedAt ?? next.startedAt;
+-        return addMinutesIso(base, cramAgainIntervalMinutes);
+-      });
+-      return promoteDueStudyRepeats(next);
+-    },
+-    [cramAgainIntervalMinutes, cramMode, reviewLogs],
++  const normalizeLoadedStudySession = React.useCallback(
++    (loaded: StudySession) => requeueDelayedStudyRepeats(loaded),
++    [],
+   );
+-  const normalizeLoadedCramSessionRef = React.useRef(normalizeLoadedCramSession);
++  const normalizeLoadedStudySessionRef = React.useRef(normalizeLoadedStudySession);
+ 
+   React.useEffect(() => {
+-    normalizeLoadedCramSessionRef.current = normalizeLoadedCramSession;
+-  }, [normalizeLoadedCramSession]);
++    normalizeLoadedStudySessionRef.current = normalizeLoadedStudySession;
++  }, [normalizeLoadedStudySession]);
+ 
+   React.useEffect(() => {
+     cardsRef.current = cards;
+@@ -724,8 +684,6 @@ export function StudyDeckOverlay({
+ 
+   const current = getCurrentCard(session);
+   const done = isDone(session);
+-  const nextDelayedRepeat = getNextDelayedRepeat(session);
+-  const [delayedRepeatClockMs, setDelayedRepeatClockMs] = React.useState(() => Date.now());
+   const reviewCountBuckets = React.useMemo(() => {
+     const learnCardIds = new Set<string>();
+     const dueCardIds = new Set<string>();
+@@ -757,7 +715,6 @@ export function StudyDeckOverlay({
+     [editingCard, studyCards],
+   );
+   const currentCardLoaded = current ? loadedCardIds.has(current.id) : true;
+-  const waitingForDelayedRepeat = Boolean(sessionReady && !done && !current && nextDelayedRepeat);
+ 
+   const [answerFeedback, setAnswerFeedback] = React.useState<
+     "right" | "wrong" | null
+@@ -773,32 +730,6 @@ export function StudyDeckOverlay({
+   const activeStudyTimeCardId =
+     sessionReady && current && currentCardLoaded && !done ? current.id : null;
+ 
+-  React.useEffect(() => {
+-    if (!sessionReady || !nextDelayedRepeat) return;
+-
+-    setSession((previous) => promoteDueStudyRepeats(previous));
+-    if (typeof window === "undefined") return;
+-
+-    const dueAtMs = Date.parse(nextDelayedRepeat.dueAt);
+-    if (!Number.isFinite(dueAtMs)) return;
+-    const timeoutMs = Math.max(0, Math.min(dueAtMs - Date.now(), 60_000));
+-    const timeoutId = window.setTimeout(() => {
+-      setDelayedRepeatClockMs(Date.now());
+-      setSession((previous) => promoteDueStudyRepeats(previous));
+-    }, timeoutMs);
+-
+-    return () => window.clearTimeout(timeoutId);
+-  }, [nextDelayedRepeat, sessionReady]);
+-
+-  React.useEffect(() => {
+-    if (!waitingForDelayedRepeat || typeof window === "undefined") return;
+-    setDelayedRepeatClockMs(Date.now());
+-    const intervalId = window.setInterval(() => {
+-      setDelayedRepeatClockMs(Date.now());
+-    }, 1000);
+-    return () => window.clearInterval(intervalId);
+-  }, [waitingForDelayedRepeat]);
+-
+   const requeuePendingStudyTimeEntries = React.useCallback((entries: readonly StudyTimeEntry[]) => {
+     for (const entry of summarizeStudyTimeEntries(entries)) {
+       pendingStudyTimeRef.current[entry.cardId] = addStudyTimeTotals(
+@@ -1072,9 +1003,8 @@ export function StudyDeckOverlay({
+       if (!saved) {
+         nextSession = fresh;
+       } else {
+-        const hydrated = normalizeLoadedCramSessionRef.current(
++        const hydrated = normalizeLoadedStudySessionRef.current(
+           hydrateStudySession(saved, currentCards),
+-          saved.updatedAt,
+         );
+         if (hydrated.queue.length === 0 || isDone(hydrated)) {
+           await discardSavedStudySession(sessionKey);
+@@ -1090,9 +1020,8 @@ export function StudyDeckOverlay({
+         const resolved = await resolveCardImages(await api.getCardsByIds(idsToHydrate));
+         if (cancelled) return;
+         nextCards = mergeStudyCards(nextCards, resolved);
+-        nextSession = normalizeLoadedCramSessionRef.current(
++        nextSession = normalizeLoadedStudySessionRef.current(
+           hydrateStudySession(serializeStudySession(nextSession), nextCards),
+-          saved?.updatedAt,
+         );
+       }
+ 
+@@ -1220,20 +1149,10 @@ export function StudyDeckOverlay({
+         cardId: answeredCardId,
+         result,
+       };
+-      const cramAgainDueAt =
+-        result === "wrong" && cramMode && cramAgainIntervalMinutes > 0
+-          ? addMinutesIso(answeredAt, cramAgainIntervalMinutes)
+-          : null;
+-      const shouldRepeatWrongNow =
+-        result === "wrong" &&
+-        cramAgainIntervalMinutes <= 0;
+       const applyResult = (prev: StudySession) =>
+         result === "right"
+           ? markCardRight(prev, studyCards)
+-          : markCardWrong(prev, studyCards, {
+-              requeueCurrent: shouldRepeatWrongNow,
+-              requeueAt: cramAgainDueAt,
+-            });
++          : markCardWrong(prev, studyCards);
+       const previewSession = applyResult(session);
+ 
+       const applyMark = () => {
+@@ -1270,8 +1189,6 @@ export function StudyDeckOverlay({
+       done,
+       flushPendingStudyTime,
+       onRecordAnswer,
+-      cramMode,
+-      cramAgainIntervalMinutes,
+       session,
+       studyTimeMode,
+       studyCards,
+@@ -1632,43 +1549,15 @@ export function StudyDeckOverlay({
+     timeMetadataEnabled && !done && liveStudyEstimate.estimatedMs > 0
+       ? formatStudyTimeEstimate(liveStudyEstimate)
+       : null;
+-  const adaptiveFsrsCalibrationState = React.useMemo(
+-    () => deriveAdaptiveFsrsCalibrationState(reviewLogs, effectiveSchedulerSettings),
+-    [effectiveSchedulerSettings, reviewLogs],
+-  );
+-  const wrongIntervalMinutes = cramMode
+-    ? cramAgainIntervalMinutes
+-    : getBinaryReviewIntervalMinutes(
+-        "wrong",
+-        effectiveSchedulerSettings,
+-        current ? reviewStates?.[current.id] : null,
+-        current?.id,
+-        new Date(),
+-        adaptiveFsrsCalibrationState,
+-      );
+-  const wrongButtonText = `Again (${formatStudyInterval(wrongIntervalMinutes)})`;
+-  const rightButtonText = cramMode
+-    ? "Good"
+-    : `Good (${formatStudyInterval(
+-        getBinaryReviewIntervalMinutes(
+-          "right",
+-          effectiveSchedulerSettings,
+-          current ? reviewStates?.[current.id] : null,
+-          current?.id,
+-          new Date(),
+-          adaptiveFsrsCalibrationState,
+-        ),
+-      )})`;
++  const wrongButtonText = "Wrong";
++  const rightButtonText = "Right";
+   const controlsDisabled =
+     !sessionReady ||
+     !current ||
+     !currentCardLoaded ||
+     done ||
+     session.queue.length === 0;
+-  const delayedRepeatWait = nextDelayedRepeat
+-    ? formatDelayedRepeatWait(nextDelayedRepeat.dueAt, delayedRepeatClockMs)
+-    : null;
+-  const stageQueueLength = waitingForDelayedRepeat ? 0 : session.queue.length;
++  const stageQueueLength = session.queue.length;
+   const cardEditor = editingCard ? (
+     <CardEditorOverlay
+       embedded={editingPlacement === "reference"}
+@@ -1805,16 +1694,6 @@ export function StudyDeckOverlay({
+                     questionHtml={questionHtml}
+                     answerHtml={answerHtml}
+                     contentScale={referenceOpen ? 0.92 : 1}
+-                    emptyTitle={
+-                      waitingForDelayedRepeat && delayedRepeatWait
+-                        ? `Next Again card in ${delayedRepeatWait}.`
+-                        : undefined
+-                    }
+-                    emptyBody={
+-                      waitingForDelayedRepeat
+-                        ? "Keep this cram session open or come back when the interval is up."
+-                        : undefined
+-                    }
+                     onMarkWrong={() => markCurrent("wrong")}
+                     onMarkRight={() => markCurrent("right")}
+                     onFlip={() => {
+diff --git a/frontend-react/src/features/study/components/StudySchedulerSettingsPanel.test.tsx b/frontend-react/src/features/study/components/StudySchedulerSettingsPanel.test.tsx
+index f481319..82c5a30 100644
+--- a/frontend-react/src/features/study/components/StudySchedulerSettingsPanel.test.tsx
++++ b/frontend-react/src/features/study/components/StudySchedulerSettingsPanel.test.tsx
+@@ -79,8 +79,8 @@ describe("StudySchedulerSettingsPanel", () => {
+     expect(screen.queryByText("Sample")).not.toBeInTheDocument();
+   });
+ 
+-  it("can hide advanced schedule controls behind the launch flag", () => {
+-    render(
++  it("hides the schedule controls behind the launch flag", () => {
++    const { container } = render(
+       <StudySchedulerSettingsPanel
+         settings={{
+           againIntervalMinutes: 10,
+@@ -110,8 +110,9 @@ describe("StudySchedulerSettingsPanel", () => {
+       />,
+     );
+ 
+-    expect(screen.getByText("Review interval")).toBeInTheDocument();
+-    expect(screen.getByLabelText("Review interval in minutes")).toBeInTheDocument();
++    expect(container).toBeEmptyDOMElement();
++    expect(screen.queryByText("Review interval")).not.toBeInTheDocument();
++    expect(screen.queryByLabelText("Review interval in minutes")).not.toBeInTheDocument();
+     expect(screen.queryByText(/Again cards reappear after/)).not.toBeInTheDocument();
+     expect(screen.queryByLabelText("Good interval in minutes")).not.toBeInTheDocument();
+     expect(screen.queryByLabelText("Desired retention percent")).not.toBeInTheDocument();
+diff --git a/frontend-react/src/features/study/components/StudySchedulerSettingsPanel.tsx b/frontend-react/src/features/study/components/StudySchedulerSettingsPanel.tsx
+index 963dc9e..874b2e1 100644
+--- a/frontend-react/src/features/study/components/StudySchedulerSettingsPanel.tsx
++++ b/frontend-react/src/features/study/components/StudySchedulerSettingsPanel.tsx
+@@ -102,20 +102,14 @@ export function StudySchedulerSettingsPanel({
+     Number.isInteger(parsedRetention) && parsedRetention >= 70 && parsedRetention <= 99;
+   const unchanged =
+     parsedAgain === settings.againIntervalMinutes &&
+-    (
+-      !advancedSettingsEnabled ||
+-      (
+-        parsedGood === settings.goodIntervalMinutes &&
+-        parsedRetention === targetRetentionPercent &&
+-        adaptiveDraft === settings.adaptiveFsrsEnabled
+-      )
+-    );
+-  const valuesValid =
+-    againValid && (!advancedSettingsEnabled || (goodValid && retentionValid));
++    parsedGood === settings.goodIntervalMinutes &&
++    parsedRetention === targetRetentionPercent &&
++    adaptiveDraft === settings.adaptiveFsrsEnabled;
++  const valuesValid = againValid && goodValid && retentionValid;
+   const canSave = valuesValid && !unchanged && !saving;
+   const estimate = React.useMemo(
+     () =>
+-      advancedSettingsEnabled && againValid && goodValid && retentionValid
++      againValid && goodValid && retentionValid
+         ? estimateBinaryStudyWorkload(reviewStates, {
+             againIntervalMinutes: parsedAgain,
+             goodIntervalMinutes: parsedGood,
+@@ -125,7 +119,6 @@ export function StudySchedulerSettingsPanel({
+         : null,
+     [
+       adaptiveDraft,
+-      advancedSettingsEnabled,
+       againValid,
+       goodValid,
+       parsedAgain,
+@@ -147,11 +140,7 @@ export function StudySchedulerSettingsPanel({
+     ? normalizeTargetRetentionPercent(parsedRetention)
+     : targetRetentionPercent;
+   const scheduleSummary =
+-    !advancedSettingsEnabled
+-      ? againValid
+-        ? null
+-        : "Use a whole number for the interval."
+-      : againValid && goodValid && retentionValid
++    againValid && goodValid && retentionValid
+       ? [
+           `${formatStudyInterval(parsedAgain)} missed`,
+           `${formatStudyInterval(parsedGood)} good`,
+@@ -165,13 +154,15 @@ export function StudySchedulerSettingsPanel({
+     ? `${diagnosticsState.sampleSize} recent reviews · ${adjustmentSign}${diagnosticsState.retentionAdjustmentPercent}% target bias · ${diagnosticsState.effectiveTargetRetentionPercent}% effective target`
+     : "Needs 6 recent study reviews before adjustment.";
+ 
++  if (!advancedSettingsEnabled) return null;
++
+   return (
+     <div className="space-y-4 rounded-xl border border-border bg-card px-4 py-4 text-sm">
+       <div className="flex flex-wrap items-center justify-between gap-3">
+         <div>
+           <div className="arcade-label text-muted-foreground">Study</div>
+           <div className="text-base font-semibold tracking-tight text-foreground">
+-            {advancedSettingsEnabled ? "FSRS schedule" : "Review interval"}
++            FSRS schedule
+           </div>
+           {scheduleSummary ? (
+             <div className="mt-1 max-w-xl text-xs font-medium leading-relaxed text-muted-foreground">
+@@ -186,15 +177,9 @@ export function StudySchedulerSettingsPanel({
+           onClick={() =>
+             void onSave({
+               againIntervalMinutes: parsedAgain,
+-              goodIntervalMinutes: advancedSettingsEnabled
+-                ? parsedGood
+-                : settings.goodIntervalMinutes,
+-              targetRetentionPercent: advancedSettingsEnabled
+-                ? normalizeTargetRetentionPercent(parsedRetention)
+-                : targetRetentionPercent,
+-              adaptiveFsrsEnabled: advancedSettingsEnabled
+-                ? adaptiveDraft
+-                : settings.adaptiveFsrsEnabled,
++              goodIntervalMinutes: parsedGood,
++              targetRetentionPercent: normalizeTargetRetentionPercent(parsedRetention),
++              adaptiveFsrsEnabled: adaptiveDraft,
+             })
+           }
+         >
+@@ -202,67 +187,59 @@ export function StudySchedulerSettingsPanel({
+         </Button>
+       </div>
+ 
+-      <div className={advancedSettingsEnabled ? "grid gap-3 sm:grid-cols-3" : "grid gap-3 sm:grid-cols-[minmax(0,14rem)]"}>
++      <div className="grid gap-3 sm:grid-cols-3">
+         <NumberField
+-          label={advancedSettingsEnabled ? "Missed" : "Interval"}
++          label="Missed"
+           suffix="min"
+           value={againDraft}
+           min={0}
+           onChange={setAgainDraft}
+-          ariaLabel={advancedSettingsEnabled ? "Missed cards interval in minutes" : "Review interval in minutes"}
++          ariaLabel="Missed cards interval in minutes"
++        />
++        <NumberField
++          label="Good"
++          suffix="min"
++          value={goodDraft}
++          min={0}
++          onChange={setGoodDraft}
++          ariaLabel="Good interval in minutes"
++        />
++        <NumberField
++          label="Retention"
++          suffix="%"
++          value={retentionDraft}
++          min={70}
++          max={99}
++          onChange={setRetentionDraft}
++          ariaLabel="Desired retention percent"
+         />
+-        {advancedSettingsEnabled ? (
+-          <>
+-            <NumberField
+-              label="Good"
+-              suffix="min"
+-              value={goodDraft}
+-              min={0}
+-              onChange={setGoodDraft}
+-              ariaLabel="Good interval in minutes"
+-            />
+-            <NumberField
+-              label="Retention"
+-              suffix="%"
+-              value={retentionDraft}
+-              min={70}
+-              max={99}
+-              onChange={setRetentionDraft}
+-              ariaLabel="Desired retention percent"
+-            />
+-          </>
+-        ) : null}
+       </div>
+ 
+       {!valuesValid ? (
+         <div className="rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm font-medium text-destructive">
+-          {advancedSettingsEnabled
+-            ? "Use whole numbers. Retention must be 70-99."
+-            : "Use a whole number for the interval."}
++          Use whole numbers. Retention must be 70-99.
+         </div>
+       ) : null}
+ 
+-      {advancedSettingsEnabled ? (
+-        <div className="rounded-lg border border-border/60 bg-background px-3 py-3">
+-          <div className="flex items-center justify-between gap-3">
+-            <div className="min-w-0">
+-              <div className="text-sm font-semibold text-foreground">Adaptive FSRS</div>
+-              <div className="mt-0.5 truncate text-xs text-muted-foreground">
+-                {adaptiveStatus}
+-              </div>
+-              <div className="mt-0.5 text-xs text-muted-foreground">
+-                {adaptiveDetail}
+-              </div>
++      <div className="rounded-lg border border-border/60 bg-background px-3 py-3">
++        <div className="flex items-center justify-between gap-3">
++          <div className="min-w-0">
++            <div className="text-sm font-semibold text-foreground">Adaptive FSRS</div>
++            <div className="mt-0.5 truncate text-xs text-muted-foreground">
++              {adaptiveStatus}
++            </div>
++            <div className="mt-0.5 text-xs text-muted-foreground">
++              {adaptiveDetail}
+             </div>
+-            <Switch
+-              checked={adaptiveDraft}
+-              onCheckedChange={setAdaptiveDraft}
+-              aria-label="Enable adaptive FSRS calibration"
+-              disabled={saving}
+-            />
+           </div>
++          <Switch
++            checked={adaptiveDraft}
++            onCheckedChange={setAdaptiveDraft}
++            aria-label="Enable adaptive FSRS calibration"
++            disabled={saving}
++          />
+         </div>
+-      ) : null}
++      </div>
+ 
+       {!canSave && !unchanged && !saving ? (
+         <div className="text-xs font-medium text-destructive">
+diff --git a/frontend-react/src/features/study/lib/studySession.test.ts b/frontend-react/src/features/study/lib/studySession.test.ts
+index 510880e..db36425 100644
+--- a/frontend-react/src/features/study/lib/studySession.test.ts
++++ b/frontend-react/src/features/study/lib/studySession.test.ts
+@@ -7,6 +7,7 @@ import {
+   markCardRight,
+   markCardWrong,
+   promoteDueStudyRepeats,
++  requeueDelayedStudyRepeats,
+   serializeStudySession,
+   reconcileCardInStudySession,
+ } from './studySession'
+@@ -263,6 +264,18 @@ describe('delayed study repeats', () => {
+     ])
+   })
+ 
++  it('can requeue all delayed repeats immediately for the simplified wrong-card flow', () => {
++    const cards = [buildCard('1'), buildCard('2')]
++    const delayed = markCardWrong(createStudySession(cards), cards, {
++      requeueAt: '2026-03-09T00:10:00.000Z',
++    })
++
++    const requeued = requeueDelayedStudyRepeats(delayed)
++
++    expect(requeued.queue.map((card) => card.id)).toEqual(['1', '2', '1'])
++    expect(requeued.delayedRepeats).toEqual([])
++  })
++
+   it('moves old immediate repeated cards into delayed repeats during migration', () => {
+     const cards = [buildCard('1'), buildCard('2')]
+     const legacy = {
+diff --git a/frontend-react/src/features/study/lib/studySession.ts b/frontend-react/src/features/study/lib/studySession.ts
+index 0c6624d..d8cef09 100644
+--- a/frontend-react/src/features/study/lib/studySession.ts
++++ b/frontend-react/src/features/study/lib/studySession.ts
+@@ -175,6 +175,18 @@ export function promoteDueStudyRepeats(session: StudySession, now = new Date()):
+   }
+ }
+ 
++export function requeueDelayedStudyRepeats(session: StudySession): StudySession {
++  if (session.delayedRepeats.length === 0) return session
++
++  const nextQueue = [...session.queue, ...session.delayedRepeats.map((repeat) => repeat.card)]
++  return {
++    ...session,
++    queue: nextQueue,
++    delayedRepeats: [],
++    flipped: session.index < nextQueue.length ? session.flipped : false,
++  }
++}
++
+ export function delaySeenQueuedRepeats(
+   session: StudySession,
+   getDueAt: (cardId: string) => string | null,

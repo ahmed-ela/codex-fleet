@@ -1,0 +1,30 @@
+{
+  "status": "succeeded",
+  "started_at": "2026-04-29T07:37:51-04:00",
+  "completed_at": "2026-04-29T07:37:57-04:00",
+  "duration_seconds": 5.8,
+  "steps": [
+    {
+      "name": "frontend-react-bun",
+      "source": "auto",
+      "cwd": "frontend-react",
+      "command": "bun install --frozen-lockfile",
+      "cache_key": "dcddda9513fc8919be023646",
+      "cache_hit": false,
+      "outputs": [
+        "node_modules"
+      ],
+      "ignored_paths": [
+        "frontend-react/node_modules"
+      ],
+      "stdout_path": "/Users/ahmedelamin/repos/projects/simplecards/.codex-fleet/runs/20260429-073747-8557/workers/20260429-073751-624773-the-title-of-deck-isn-t-cetnered-rn-it-should-be-in-same-row/prepare/01-frontend-react-bun/install.stdout",
+      "stderr_path": "/Users/ahmedelamin/repos/projects/simplecards/.codex-fleet/runs/20260429-073747-8557/workers/20260429-073751-624773-the-title-of-deck-isn-t-cetnered-rn-it-should-be-in-same-row/prepare/01-frontend-react-bun/install.stderr",
+      "exit_code": 0,
+      "status": "succeeded",
+      "duration_seconds": 5.8
+    }
+  ],
+  "ignored_paths": [
+    "frontend-react/node_modules"
+  ]
+}

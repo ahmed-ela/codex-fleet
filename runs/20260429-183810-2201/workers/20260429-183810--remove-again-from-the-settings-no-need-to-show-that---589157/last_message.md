@@ -1,0 +1,22 @@
+# Headful Codex screen capture
+
+This worker ran in the interactive Codex TUI. The final visible pane capture is below.
+
+```text
+     .../study/components/StudySchedulerSettingsPanel.tsx         | 12 ++++++------
+     2 files changed, 9 insertions(+), 9 deletions(-)
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• Summary:
+  Removed visible Again wording from the scheduler settings field copy, using Missed, Review interval, and neutral
+  validation text instead. Updated the matching component tests.
+
+  Files changed:
+Token usage: total=56,695 input=50,974 (+ 385,792 cached) output=5,721 (reasoning 3,235)
+To continue this session, run codex resume 019ddb64-d206-79f1-850c-e41611da511f
+
+
+
+
+```

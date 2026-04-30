@@ -1,0 +1,7 @@
+ .../decks/components/MainAppRoute.test.tsx         | 92 +++++++++++++++++++---
+ .../src/features/decks/components/MainAppRoute.tsx | 78 +++++++++++++++++-
+ .../study/components/StudyControls.test.tsx        |  4 +-
+ .../features/study/components/StudyControls.tsx    |  5 +-
+ .../study/components/StudyDeckOverlay.test.tsx     | 14 ++--
+ .../features/study/components/StudyDeckOverlay.tsx |  1 -
+ 6 files changed, 167 insertions(+), 27 deletions(-)

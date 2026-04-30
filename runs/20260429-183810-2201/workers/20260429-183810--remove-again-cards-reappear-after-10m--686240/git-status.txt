@@ -1,0 +1,2 @@
+ M frontend-react/src/features/study/components/StudySchedulerSettingsPanel.test.tsx
+ M frontend-react/src/features/study/components/StudySchedulerSettingsPanel.tsx

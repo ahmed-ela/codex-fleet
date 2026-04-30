@@ -1,0 +1,9 @@
+ M frontend-react/src/app.css
+ M frontend-react/src/features/decks/components/DeckBrowserTable.test.tsx
+ M frontend-react/src/features/decks/components/DeckBrowserTable.tsx
+ M frontend-react/src/features/decks/components/DeckDesktopMenu.test.tsx
+ M frontend-react/src/features/decks/components/DeckDesktopMenu.tsx
+ M frontend-react/src/features/decks/components/DeckDesktopShell.tsx
+ M frontend-react/src/features/decks/components/MainAppRoute.test.tsx
+ M frontend-react/src/features/decks/components/MainAppRoute.tsx
+ M frontend-react/src/features/decks/types.ts

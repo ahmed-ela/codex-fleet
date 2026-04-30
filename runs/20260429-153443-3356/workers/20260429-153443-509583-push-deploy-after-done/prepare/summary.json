@@ -1,0 +1,29 @@
+{
+  "status": "succeeded",
+  "started_at": "2026-04-29T15:34:43-04:00",
+  "completed_at": "2026-04-29T15:34:46-04:00",
+  "duration_seconds": 3.07,
+  "steps": [
+    {
+      "name": "frontend-react-bun",
+      "source": "auto",
+      "cwd": "frontend-react",
+      "command": "bun install --frozen-lockfile",
+      "cache_key": "dcddda9513fc8919be023646",
+      "cache_hit": true,
+      "outputs": [
+        "node_modules"
+      ],
+      "ignored_paths": [
+        "frontend-react/node_modules"
+      ],
+      "stdout_path": "/Users/ahmedelamin/repos/projects/simplecards/.codex-fleet/runs/20260429-153443-3356/workers/20260429-153443-509583-push-deploy-after-done/prepare/01-frontend-react-bun/install.stdout",
+      "stderr_path": "/Users/ahmedelamin/repos/projects/simplecards/.codex-fleet/runs/20260429-153443-3356/workers/20260429-153443-509583-push-deploy-after-done/prepare/01-frontend-react-bun/install.stderr",
+      "status": "succeeded",
+      "duration_seconds": 3.07
+    }
+  ],
+  "ignored_paths": [
+    "frontend-react/node_modules"
+  ]
+}

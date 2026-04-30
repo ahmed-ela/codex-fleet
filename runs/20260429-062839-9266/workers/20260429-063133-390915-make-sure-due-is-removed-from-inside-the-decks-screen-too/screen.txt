@@ -1,0 +1,23 @@
+     M frontend-react/src/features/decks/components/DeckBrowserTable.tsx
+     M frontend-react/src/features/decks/components/MainAppRoute.test.tsx
+
+──────────────────────────────────────────────────────────────────────────────────
+
+• Removed the visible Due stat from the Decks screen deck browser: desktop no
+  longer has the Due column, and mobile compact stats no longer show the Due pill.
+  dueCount still stays in the row data for reset/study logic.
+
+  Files changed:
+
+  - frontend-react/src/features/decks/components/DeckBrowserTable.tsx
+  - frontend-react/src/features/decks/components/DeckBrowserTable.test.tsx
+  - frontend-react/src/features/decks/components/MainAppRoute.test.tsx
+
+  Checks run:
+
+  - bun install --frozen-lockfile in frontend-react to restore missing deps
+Token usage: total=70,150 input=63,739 (+ 1,047,552 cached) output=6,411 (reasonin
+g 1,809)
+To continue this session, run codex resume 019dd8cb-44da-76c3-8b93-0499852458e1
+
+

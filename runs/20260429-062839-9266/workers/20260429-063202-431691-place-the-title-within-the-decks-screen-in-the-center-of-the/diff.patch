@@ -1,0 +1,48 @@
+diff --git a/frontend-react/src/features/decks/components/DeckDesktopMenu.test.tsx b/frontend-react/src/features/decks/components/DeckDesktopMenu.test.tsx
+index fec99c8..28f20d3 100644
+--- a/frontend-react/src/features/decks/components/DeckDesktopMenu.test.tsx
++++ b/frontend-react/src/features/decks/components/DeckDesktopMenu.test.tsx
+@@ -160,7 +160,13 @@ describe("DeckDesktopMenu", () => {
+     );
+ 
+     const areaHeader = screen.getByTestId("deck-area-header");
+-    expect(within(areaHeader).getByText("Decks")).toBeInTheDocument();
++    const areaHeaderTitle = screen.getByTestId("deck-area-header-title");
++    const areaHeaderActions = screen.getByTestId("deck-area-header-actions");
++
++    expect(areaHeader).toHaveClass("grid", "grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]");
++    expect(areaHeaderTitle).toHaveClass("justify-self-center", "text-center");
++    expect(areaHeaderActions).toHaveClass("justify-self-end");
++    expect(within(areaHeaderTitle).getByText("Decks")).toBeInTheDocument();
+     expect(within(areaHeader).getByRole("button", { name: "Add deck" })).toBeInTheDocument();
+     expect(within(areaHeader).getByRole("button", { name: "Open settings" })).toBeInTheDocument();
+     expect(within(areaHeader).queryByRole("button", { name: "Add card" })).not.toBeInTheDocument();
+diff --git a/frontend-react/src/features/decks/components/DeckDesktopMenu.tsx b/frontend-react/src/features/decks/components/DeckDesktopMenu.tsx
+index 0c2348b..7ef1aef 100644
+--- a/frontend-react/src/features/decks/components/DeckDesktopMenu.tsx
++++ b/frontend-react/src/features/decks/components/DeckDesktopMenu.tsx
+@@ -87,14 +87,21 @@ export function DeckDesktopMenu({ model }: { model: DeckScreenHeaderModel }) {
+         {areaHeader ? (
+           <div
+             data-testid="deck-area-header"
+-            className="flex min-w-0 flex-wrap items-center justify-between gap-2 rounded-xl border border-border/70 bg-background px-3 py-2 shadow-sm lg:rounded-lg lg:px-3 lg:py-2"
++            className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 rounded-xl border border-border/70 bg-background px-3 py-2 shadow-sm lg:rounded-lg lg:px-3 lg:py-2"
+           >
+-            <div className="min-w-0 px-0.5">
++            <div aria-hidden="true" />
++            <div
++              data-testid="deck-area-header-title"
++              className="min-w-0 justify-self-center px-0.5 text-center"
++            >
+               <div className="truncate text-sm font-semibold text-foreground">
+                 {areaHeader.title}
+               </div>
+             </div>
+-            <div className="flex min-w-0 items-center justify-end gap-1">
++            <div
++              data-testid="deck-area-header-actions"
++              className="flex min-w-0 items-center justify-end gap-1 justify-self-end"
++            >
+               {areaHeader.actions.map(renderActionButton)}
+             </div>
+           </div>

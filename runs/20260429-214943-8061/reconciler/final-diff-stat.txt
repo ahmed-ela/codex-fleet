@@ -1,0 +1,8 @@
+ .../decks/components/DeckDesktopMenu.test.tsx      |  4 +-
+ .../features/decks/components/DeckDesktopShell.tsx |  4 +-
+ .../decks/components/DeckResponsiveChrome.test.tsx | 12 ++++--
+ .../decks/components/MainAppRoute.test.tsx         | 47 +++++++++++++++-------
+ .../src/features/decks/components/MainAppRoute.tsx |  7 +++-
+ .../src/features/study/lib/studyTime.test.ts       |  4 +-
+ frontend-react/src/features/study/lib/studyTime.ts |  2 +-
+ 7 files changed, 51 insertions(+), 29 deletions(-)

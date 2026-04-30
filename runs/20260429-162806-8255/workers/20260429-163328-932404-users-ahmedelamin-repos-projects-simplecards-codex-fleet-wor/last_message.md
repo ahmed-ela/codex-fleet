@@ -1,0 +1,71 @@
+# Headful Codex screen capture
+
+This worker ran in the interactive Codex TUI. The final visible pane capture is below.
+
+```text
+
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• The focused test run passed. I’m doing a quick diff review and a targeted lint pass on the touched files before I wrap
+  this worker result.
+
+• Ran git diff -- frontend-react/src/features/decks/components/MainAppRoute.test.tsx frontend-react/src/features/decks/
+  │ lib/deckBrowser.test.ts frontend-react/src/features/study/lib/reviewScheduler.test.ts
+  └ diff --git a/frontend-react/src/features/decks/components/MainAppRoute.test.tsx b/frontend-react/src/features/decks/
+    components/MainAppRoute.test.tsx
+    … +143 lines (ctrl + t to view transcript)
+         const estimate = estimateBinaryStudyWorkload(
+           {
+
+• Ran git status --short
+  └  M frontend-react/src/features/decks/components/MainAppRoute.test.tsx
+     M frontend-react/src/features/decks/lib/deckBrowser.test.ts
+     M frontend-react/src/features/study/lib/reviewScheduler.test.ts
+
+• Ran bunx eslint src/features/decks/components/MainAppRoute.test.tsx src/features/decks/lib/deckBrowser.test.ts src/
+  │ features/study/lib/reviewScheduler.test.ts
+  └ (no output)
+
+• Explored
+  └ Read MEMORY.md
+
+• Ran git diff --check
+  └ (no output)
+
+• Explored
+  └ Read MainAppRoute.test.tsx, deckBrowser.test.ts, reviewScheduler.test.ts
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• Implemented test-only coverage for the assigned robustness job.
+
+  Changed:
+
+  - frontend-react/src/features/decks/components/MainAppRoute.test.tsx:570: asserts mobile deck-home does not leak Add
+    card, and selected-deck mobile dock does not leak Add deck.
+  - frontend-react/src/features/decks/lib/deckBrowser.test.ts:112: adds nested parent/child deck dedupe and stale review-
+    state edge cases.
+  - frontend-react/src/features/study/lib/reviewScheduler.test.ts:333: adds an invariant that counts and eligibility are
+    tied to supplied deck cards, not orphaned review states.
+
+  Checks run:
+
+  - bun run test src/features/decks/lib/deckBrowser.test.ts src/features/study/lib/reviewScheduler.test.ts src/features/
+    decks/components/MainAppRoute.test.tsx passed: 3 files, 72 tests.
+  - bunx eslint src/features/decks/components/MainAppRoute.test.tsx src/features/decks/lib/deckBrowser.test.ts src/
+    features/study/lib/reviewScheduler.test.ts passed.
+  - git diff --check passed.
+
+  Merge risks:
+
+  - MainAppRoute.test.tsx may overlap with the other active Add deck UI job if it adds/changes tests around the same
+    mobile dock behavior.
+  - No production files changed, so runtime merge risk is low.
+
+
+› Write tests for @filename
+
+  gpt-5.5 xhigh · ~/repos/projects/simplecards/.codex-fleet/worktrees/20260429-162806-8255/20260429-163328-932404-users-ahmedelamin-repos-projects-simplecards-codex-fleet-wor
+
+```

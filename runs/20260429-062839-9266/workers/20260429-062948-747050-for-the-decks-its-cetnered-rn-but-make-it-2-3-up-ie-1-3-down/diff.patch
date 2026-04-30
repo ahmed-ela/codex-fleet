@@ -1,0 +1,30 @@
+diff --git a/frontend-react/src/app.css b/frontend-react/src/app.css
+index 25d1d49..3786b98 100644
+--- a/frontend-react/src/app.css
++++ b/frontend-react/src/app.css
+@@ -276,9 +276,12 @@
+   }
+ 
+   .deck-browser-stack-home {
+-    min-height: calc(var(--app-vv-height, 100svh) - 8rem);
++    --deck-browser-home-height: calc(var(--app-vv-height, 100svh) - 8rem);
++
++    min-height: var(--deck-browser-home-height);
+     justify-content: center;
+     padding-top: 0;
++    padding-bottom: calc(var(--deck-browser-home-height) / 3);
+   }
+ 
+   @media (min-width: 1024px) {
+@@ -291,8 +294,10 @@
+     }
+ 
+     .deck-browser-stack-home {
++      --deck-browser-home-height: calc(var(--app-vv-height, 100svh) - 6.5rem);
++
+       max-width: min(100%, 48rem);
+-      min-height: calc(var(--app-vv-height, 100svh) - 6.5rem);
++      min-height: var(--deck-browser-home-height);
+       padding-top: 0;
+       margin-top: 0;
+     }

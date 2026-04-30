@@ -1,0 +1,174 @@
+diff --git a/frontend-react/src/features/decks/components/DeckDesktopMenu.test.tsx b/frontend-react/src/features/decks/components/DeckDesktopMenu.test.tsx
+index cb2a304..2844228 100644
+--- a/frontend-react/src/features/decks/components/DeckDesktopMenu.test.tsx
++++ b/frontend-react/src/features/decks/components/DeckDesktopMenu.test.tsx
+@@ -198,7 +198,7 @@ describe("DeckDesktopMenu", () => {
+             { id: "select", label: "Select", onClick: vi.fn() },
+           ],
+           trailingActions: [
+-            { id: "cram", label: "Cram", onClick: vi.fn() },
++            { id: "cram", label: "Study", onClick: vi.fn() },
+             {
+               id: "settings",
+               label: "Open settings",
+@@ -220,7 +220,7 @@ describe("DeckDesktopMenu", () => {
+       "lg:row-start-1",
+       "lg:justify-self-start",
+     );
+-    expect(screen.getByRole("button", { name: "Cram" }).parentElement).toHaveClass(
++    expect(screen.getByRole("button", { name: "Study" }).parentElement).toHaveClass(
+       "lg:col-start-3",
+       "lg:row-start-1",
+       "lg:justify-self-end",
+diff --git a/frontend-react/src/features/decks/components/DeckResponsiveChrome.test.tsx b/frontend-react/src/features/decks/components/DeckResponsiveChrome.test.tsx
+index fb040f6..88f0d8b 100644
+--- a/frontend-react/src/features/decks/components/DeckResponsiveChrome.test.tsx
++++ b/frontend-react/src/features/decks/components/DeckResponsiveChrome.test.tsx
+@@ -12,7 +12,7 @@ describe("DeckMobileActionDock", () => {
+           actions: [
+             { id: "decks", label: "Decks", onClick: vi.fn(), icon: Home },
+             { id: "study", label: "Study", onClick: vi.fn(), icon: BookOpen, variant: "default" },
+-            { id: "cram", label: "Cram", onClick: vi.fn(), icon: Flame },
++            { id: "cram", label: "Study", onClick: vi.fn(), icon: Flame },
+             { id: "add-card", label: "Add card", onClick: vi.fn(), icon: Plus },
+           ],
+         }}
+@@ -24,11 +24,15 @@ describe("DeckMobileActionDock", () => {
+     const actionPill = screen.getByTestId("deck-mobile-action-pill");
+     expect(actionPill).toHaveClass("grid-flow-col", "auto-cols-fr", "rounded-full");
+ 
+-    for (const label of ["Decks", "Study", "Cram"]) {
+-      const button = within(actionPill).getByRole("button", { name: label });
++    const visibleActionButtons = [
++      within(actionPill).getByRole("button", { name: "Decks" }),
++      ...within(actionPill).getAllByRole("button", { name: "Study" }),
++    ];
++    expect(visibleActionButtons).toHaveLength(3);
++    for (const button of visibleActionButtons) {
+       expect(button).toHaveClass("rounded-full");
+       expect(button.querySelector("svg")).not.toBeNull();
+-      expect(within(button).getByText(label)).toHaveClass("text-center", "text-[0.625rem]");
++      expect(within(button).getByText(button.textContent ?? "")).toHaveClass("text-center", "text-[0.625rem]");
+     }
+     expect(within(actionPill).getByRole("button", { name: "Decks" }).querySelectorAll("rect")).toHaveLength(3);
+ 
+diff --git a/frontend-react/src/features/decks/components/MainAppRoute.test.tsx b/frontend-react/src/features/decks/components/MainAppRoute.test.tsx
+index c493304..5ea6c3e 100644
+--- a/frontend-react/src/features/decks/components/MainAppRoute.test.tsx
++++ b/frontend-react/src/features/decks/components/MainAppRoute.test.tsx
+@@ -803,11 +803,15 @@ describe('MainAppRoute', () => {
+     const actionPill = screen.getByTestId('deck-mobile-action-pill')
+     expect(actionPill).toHaveClass('grid-flow-col', 'auto-cols-fr', 'rounded-full')
+     expect(screen.queryByRole('button', { name: 'Settings' })).not.toBeInTheDocument()
+-    for (const label of ['Decks', 'Cram']) {
++    for (const label of ['Decks', 'Study']) {
+       expect(within(actionPill).getByRole('button', { name: label }).querySelector('svg')).not.toBeNull()
+     }
++    expect(
++      within(actionPill)
++        .getAllByRole('button')
++        .map((button) => button.getAttribute('aria-label') ?? button.textContent),
++    ).toEqual(['Decks', 'Study'])
+     expect(within(actionPill).queryByRole('button', { name: 'Add deck' })).not.toBeInTheDocument()
+-    expect(within(actionPill).queryByRole('button', { name: 'Study' })).not.toBeInTheDocument()
+     expect(within(actionPill).queryByRole('button', { name: 'Select' })).not.toBeInTheDocument()
+     expect(within(actionPill).queryByRole('button', { name: 'Add card' })).not.toBeInTheDocument()
+     expect(within(mobileDock).queryByRole('button', { name: 'Add deck' })).not.toBeInTheDocument()
+@@ -1146,15 +1150,14 @@ describe('MainAppRoute', () => {
+     expect(screen.queryByRole('button', { name: /2d/ })).not.toBeInTheDocument()
+   })
+ 
+-  it('shows Cram as the only study action in the selected deck header by default', async () => {
++  it('shows Study as the only study action in the selected deck header by default', async () => {
+     renderCardsRoute()
+     await waitForPreviewCards()
+ 
+     expect(getPrimaryDecksButton()).toBeInTheDocument()
+     expect(screen.queryByRole('button', { name: 'Home' })).not.toBeInTheDocument()
+     expect(screen.queryByRole('button', { name: 'Select' })).not.toBeInTheDocument()
+-    expect(screen.queryByRole('button', { name: 'Study' })).not.toBeInTheDocument()
+-    expect(screen.getByRole('button', { name: 'Cram' })).toBeInTheDocument()
++    expect(screen.getAllByRole('button', { name: 'Study' })).toHaveLength(1)
+     expect(screen.getByRole('button', { name: 'Add card' })).toBeInTheDocument()
+     expect(screen.queryByRole('button', { name: 'Reset' })).not.toBeInTheDocument()
+   })
+@@ -1200,7 +1203,7 @@ describe('MainAppRoute', () => {
+     expect(screen.queryByRole('dialog', { name: 'Reset study for “Biology”?' })).not.toBeInTheDocument()
+   }, 10000)
+ 
+-  it('opens cram from all visible deck cards and uses a separate cram-session state', async () => {
++  it('opens study from all visible deck cards and uses a separate cram-session state', async () => {
+     seedStore([
+       buildCard('card-1', ['tag-bio'], ['Biology'], 'Biology prompt', '2026-04-14T00:00:01.000Z'),
+     ])
+@@ -1219,10 +1222,10 @@ describe('MainAppRoute', () => {
+     expectNoVisibleCountLabel('Due 1')
+     expectVisibleCountLabel('Progress 0/1')
+     expectNoVisibleCountLabel('Done 1')
+-    expect(screen.queryByRole('button', { name: 'Study' })).not.toBeInTheDocument()
+-    expect(screen.getByRole('button', { name: 'Cram' })).toBeEnabled()
++    expect(screen.getAllByRole('button', { name: 'Study' })).toHaveLength(1)
++    expect(screen.getByRole('button', { name: 'Study' })).toBeEnabled()
+ 
+-    fireEvent.click(screen.getByRole('button', { name: 'Cram' }))
++    fireEvent.click(screen.getByRole('button', { name: 'Study' }))
+ 
+     const studySurface = await screen.findByTestId('study-stage-surface')
+     expect(await within(studySurface).findByText('Biology prompt')).toBeInTheDocument()
+@@ -1265,7 +1268,7 @@ describe('MainAppRoute', () => {
+     renderCardsRoute()
+     await waitForPreviewCards(2)
+ 
+-    fireEvent.click(screen.getByRole('button', { name: 'Cram' }))
++    fireEvent.click(screen.getByRole('button', { name: 'Study' }))
+ 
+     const studySurface = await screen.findByTestId('study-stage-surface')
+     expect(await within(studySurface).findByText('Biology prompt 2')).toBeInTheDocument()
+diff --git a/frontend-react/src/features/decks/components/MainAppRoute.tsx b/frontend-react/src/features/decks/components/MainAppRoute.tsx
+index 9b06b53..0a41303 100644
+--- a/frontend-react/src/features/decks/components/MainAppRoute.tsx
++++ b/frontend-react/src/features/decks/components/MainAppRoute.tsx
+@@ -2683,7 +2683,7 @@ export function MainAppRoute({
+           : []),
+         {
+           id: "cram",
+-          label: "Cram",
++          label: "Study",
+           onClick: () => openStudySession("cram"),
+           disabled: !canCram,
+           variant: studyModeVisible ? "outline" : "default",
+@@ -2748,7 +2748,7 @@ export function MainAppRoute({
+           : []),
+         {
+           id: "cram",
+-          label: "Cram",
++          label: "Study",
+           onClick: () => openStudySession("cram"),
+           disabled: !canCram,
+           icon: Flame,
+diff --git a/frontend-react/src/features/study/lib/studyTime.test.ts b/frontend-react/src/features/study/lib/studyTime.test.ts
+index 81606dd..ded26ae 100644
+--- a/frontend-react/src/features/study/lib/studyTime.test.ts
++++ b/frontend-react/src/features/study/lib/studyTime.test.ts
+@@ -64,7 +64,7 @@ describe('studyTime', () => {
+ 
+     expect(formatStudyTimeBreakdown(null)).toBe('No time yet')
+     expect(formatStudyTimeBreakdown({ studyMs: 60_000 })).toBe('Study 1m')
+-    expect(formatStudyTimeBreakdown({ cramMs: 30_000 })).toBe('Cram 30s')
+-    expect(formatStudyTimeBreakdown({ studyMs: 60_000, cramMs: 30_000 })).toBe('Study 1m · Cram 30s')
++    expect(formatStudyTimeBreakdown({ cramMs: 30_000 })).toBe('Study 30s')
++    expect(formatStudyTimeBreakdown({ studyMs: 60_000, cramMs: 30_000 })).toBe('Study 1m · Study 30s')
+   })
+ })
+diff --git a/frontend-react/src/features/study/lib/studyTime.ts b/frontend-react/src/features/study/lib/studyTime.ts
+index b412871..7647964 100644
+--- a/frontend-react/src/features/study/lib/studyTime.ts
++++ b/frontend-react/src/features/study/lib/studyTime.ts
+@@ -91,6 +91,6 @@ export function formatStudyTimeBreakdown(value: Partial<StudyTimeTotals> | null
+ 
+   const parts: string[] = [];
+   if (studyMs > 0) parts.push(`Study ${formatStudyTime(studyMs)}`);
+-  if (cramMs > 0) parts.push(`Cram ${formatStudyTime(cramMs)}`);
++  if (cramMs > 0) parts.push(`Study ${formatStudyTime(cramMs)}`);
+   return parts.join(" · ");
+ }

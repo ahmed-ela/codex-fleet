@@ -1,0 +1,251 @@
+diff --git a/frontend-react/src/features/decks/components/DeckBrowserTable.test.tsx b/frontend-react/src/features/decks/components/DeckBrowserTable.test.tsx
+index cfb22fb..c026d8a 100644
+--- a/frontend-react/src/features/decks/components/DeckBrowserTable.test.tsx
++++ b/frontend-react/src/features/decks/components/DeckBrowserTable.test.tsx
+@@ -51,7 +51,7 @@ describe("DeckBrowserTable", () => {
+     expect(onResetDeck).toHaveBeenCalledWith(baseRow);
+   });
+ 
+-  it("labels the browser heading as Decks", () => {
++  it("labels the browser name column", () => {
+     render(
+       <DeckBrowserTable
+         rows={[baseRow]}
+@@ -64,7 +64,7 @@ describe("DeckBrowserTable", () => {
+       />,
+     );
+ 
+-    expect(screen.getByText("Decks")).toBeInTheDocument();
++    expect(screen.getByText("Name")).toBeInTheDocument();
+   });
+ 
+   it("shows due counts in the compact mobile stats", () => {
+diff --git a/frontend-react/src/features/decks/components/DeckBrowserTable.tsx b/frontend-react/src/features/decks/components/DeckBrowserTable.tsx
+index e8e9131..21a9ffb 100644
+--- a/frontend-react/src/features/decks/components/DeckBrowserTable.tsx
++++ b/frontend-react/src/features/decks/components/DeckBrowserTable.tsx
+@@ -185,7 +185,7 @@ export function DeckBrowserTable({
+     <section className="flex h-auto min-h-0 min-w-0 max-h-[min(60svh,32rem)] flex-col overflow-hidden rounded-[1.25rem] border border-border/70 bg-card/80 shadow-[0_16px_42px_rgb(15_23_42_/_0.08)] sm:max-h-[min(68svh,34rem)] sm:rounded-2xl lg:h-auto lg:max-h-[min(52svh,38rem)]">
+       <div className="sticky top-0 z-10 hidden grid-cols-[minmax(0,1fr)_4rem_4rem_4rem_7.5rem_7.5rem_2.25rem] items-center gap-1.5 border-b border-border/70 bg-card/95 px-4 py-3 text-xs font-semibold uppercase tracking-[0.16em] text-muted-foreground backdrop-blur supports-[backdrop-filter]:bg-card/85 lg:grid">
+         <div className="px-2 text-left text-sm font-semibold normal-case tracking-normal text-foreground">
+-          Decks
++          Name
+         </div>
+         <div className="pr-1 text-right text-foreground">New</div>
+         <div className="pr-1 text-right text-foreground">Learn</div>
+diff --git a/frontend-react/src/features/decks/components/DeckDesktopMenu.test.tsx b/frontend-react/src/features/decks/components/DeckDesktopMenu.test.tsx
+index 23d2751..3456804 100644
+--- a/frontend-react/src/features/decks/components/DeckDesktopMenu.test.tsx
++++ b/frontend-react/src/features/decks/components/DeckDesktopMenu.test.tsx
+@@ -1,5 +1,5 @@
+ import { describe, expect, it, vi } from "vitest";
+-import { render, screen } from "@testing-library/react";
++import { render, screen, within } from "@testing-library/react";
+ import { DeckDesktopMenu } from "./DeckDesktopMenu";
+ 
+ describe("DeckDesktopMenu", () => {
+@@ -135,6 +135,38 @@ describe("DeckDesktopMenu", () => {
+     expect(buttons).toEqual(["", "Add deck", "Add card", ""]);
+   });
+ 
++  it("renders area header actions in a separate deck area", () => {
++    render(
++      <DeckDesktopMenu
++        model={{
++          navigationLabel: "Nocards",
++          onNavigation: vi.fn(),
++          trailingActions: [
++            { id: "add-card", label: "Add card", onClick: vi.fn(), variant: "default" },
++          ],
++          areaHeader: {
++            title: "Decks",
++            actions: [
++              { id: "add-deck", label: "Add deck", onClick: vi.fn() },
++              {
++                id: "settings",
++                label: "Open settings",
++                onClick: vi.fn(),
++                iconOnly: true,
++              },
++            ],
++          },
++        }}
++      />,
++    );
++
++    const areaHeader = screen.getByTestId("deck-area-header");
++    expect(within(areaHeader).getByText("Decks")).toBeInTheDocument();
++    expect(within(areaHeader).getByRole("button", { name: "Add deck" })).toBeInTheDocument();
++    expect(within(areaHeader).getByRole("button", { name: "Open settings" })).toBeInTheDocument();
++    expect(within(areaHeader).queryByRole("button", { name: "Add card" })).not.toBeInTheDocument();
++  });
++
+   it("does not depend on matchMedia for layout decisions", () => {
+     Object.defineProperty(window, "matchMedia", {
+       writable: true,
+diff --git a/frontend-react/src/features/decks/components/DeckDesktopMenu.tsx b/frontend-react/src/features/decks/components/DeckDesktopMenu.tsx
+index d201383..7f31b6c 100644
+--- a/frontend-react/src/features/decks/components/DeckDesktopMenu.tsx
++++ b/frontend-react/src/features/decks/components/DeckDesktopMenu.tsx
+@@ -30,6 +30,7 @@ function renderActionButton(action: DeckScreenAction) {
+ 
+ export function DeckDesktopMenu({ model }: { model: DeckScreenHeaderModel }) {
+   const {
++    areaHeader,
+     navigationLabel,
+     onNavigation,
+     title,
+@@ -70,21 +71,38 @@ export function DeckDesktopMenu({ model }: { model: DeckScreenHeaderModel }) {
+ 
+   return (
+     <section className="min-w-0 rounded-2xl border border-border/70 bg-card/80 p-1.5 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-background/90 lg:border-0 lg:bg-transparent lg:p-0 lg:shadow-none">
+-      <div className="flex flex-col gap-2 lg:grid lg:min-w-0 lg:grid-cols-[minmax(0,1fr)_minmax(0,16rem)_minmax(0,1fr)] lg:items-center lg:gap-1">
+-        {titleBlock ? (
+-          <div className="min-w-0 px-2 pt-0.5 text-center lg:order-2 lg:px-1">
+-            {titleBlock}
+-          </div>
+-        ) : null}
+-        <div className="order-2 flex items-center justify-between gap-2 lg:order-1 lg:contents">
+-          <div className="flex min-w-0 items-center gap-1 lg:col-start-1 lg:justify-self-start">
+-            {navigationButton}
+-            {leadingActions.map(renderActionButton)}
+-          </div>
+-          <div className="flex min-w-0 items-center justify-end gap-1 lg:col-start-3 lg:justify-self-end">
+-            {trailingActions.map(renderActionButton)}
++      <div className="flex min-w-0 flex-col gap-2">
++        <div className="flex flex-col gap-2 lg:grid lg:min-w-0 lg:grid-cols-[minmax(0,1fr)_minmax(0,16rem)_minmax(0,1fr)] lg:items-center lg:gap-1">
++          {titleBlock ? (
++            <div className="min-w-0 px-2 pt-0.5 text-center lg:order-2 lg:px-1">
++              {titleBlock}
++            </div>
++          ) : null}
++          <div className="order-2 flex items-center justify-between gap-2 lg:order-1 lg:contents">
++            <div className="flex min-w-0 items-center gap-1 lg:col-start-1 lg:justify-self-start">
++              {navigationButton}
++              {leadingActions.map(renderActionButton)}
++            </div>
++            <div className="flex min-w-0 items-center justify-end gap-1 lg:col-start-3 lg:justify-self-end">
++              {trailingActions.map(renderActionButton)}
++            </div>
+           </div>
+         </div>
++        {areaHeader ? (
++          <div
++            data-testid="deck-area-header"
++            className="flex min-w-0 flex-wrap items-center justify-between gap-2 rounded-xl border border-border/70 bg-background px-3 py-2 shadow-sm lg:rounded-lg lg:px-3 lg:py-2"
++          >
++            <div className="min-w-0 px-0.5">
++              <div className="truncate text-sm font-semibold text-foreground">
++                {areaHeader.title}
++              </div>
++            </div>
++            <div className="flex min-w-0 items-center justify-end gap-1">
++              {areaHeader.actions.map(renderActionButton)}
++            </div>
++          </div>
++        ) : null}
+       </div>
+     </section>
+   );
+diff --git a/frontend-react/src/features/decks/components/MainAppRoute.test.tsx b/frontend-react/src/features/decks/components/MainAppRoute.test.tsx
+index 62817c5..3bee408 100644
+--- a/frontend-react/src/features/decks/components/MainAppRoute.test.tsx
++++ b/frontend-react/src/features/decks/components/MainAppRoute.test.tsx
+@@ -1216,18 +1216,18 @@ describe('MainAppRoute', () => {
+     expect(screen.getByText('Focus the deck search. Uses Ctrl + K on Windows and Linux.')).toBeInTheDocument()
+   })
+ 
+-  it('shows the desktop folder toolbar above the folder browser', async () => {
++  it('shows deck actions in their own desktop area header', async () => {
+     renderDecksRoute()
+ 
+     await screen.findByRole('button', { name: 'Biology' })
+ 
++    const deckAreaHeader = screen.getByTestId('deck-area-header')
+     expect(screen.getAllByRole('button', { name: 'Nocards' }).length).toBeGreaterThan(0)
+     expect(screen.getByRole('button', { name: 'Add card' })).toBeInTheDocument()
+-    expect(screen.getByRole('button', { name: 'Open settings' })).toBeInTheDocument()
+-    expect(screen.getByRole('button', { name: 'Add deck' })).toBeInTheDocument()
+-    const toolbarButtons = screen.getAllByRole('button').map((button) => button.textContent)
+-    expect(toolbarButtons.indexOf('Add deck')).toBeLessThan(toolbarButtons.indexOf('Add card'))
+-    expect(screen.getByText('Decks')).toBeInTheDocument()
++    expect(within(deckAreaHeader).getByText('Decks')).toBeInTheDocument()
++    expect(within(deckAreaHeader).getByRole('button', { name: 'Add deck' })).toBeInTheDocument()
++    expect(within(deckAreaHeader).getByRole('button', { name: 'Open settings' })).toBeInTheDocument()
++    expect(within(deckAreaHeader).queryByRole('button', { name: 'Add card' })).not.toBeInTheDocument()
+     expect(screen.queryByText('Go Back')).not.toBeInTheDocument()
+     expect(screen.queryByRole('textbox', { name: 'Search or create decks' })).not.toBeInTheDocument()
+     expect(screen.getByRole('button', { name: 'Biology' })).toBeInTheDocument()
+diff --git a/frontend-react/src/features/decks/components/MainAppRoute.tsx b/frontend-react/src/features/decks/components/MainAppRoute.tsx
+index 1a84184..fee19f3 100644
+--- a/frontend-react/src/features/decks/components/MainAppRoute.tsx
++++ b/frontend-react/src/features/decks/components/MainAppRoute.tsx
+@@ -1856,15 +1856,6 @@ export function MainAppRoute({
+     () => ({
+       navigationLabel: "Nocards",
+       onNavigation: handleOpenDecksHome,
+-      leadingActions: [
+-        {
+-          id: "add-deck",
+-          label: "Add deck",
+-          onClick: handleDesktopAddDeckClick,
+-          active: createDeckOpen,
+-          variant: "outline",
+-        },
+-      ],
+       trailingActions: [
+         {
+           id: "add-card",
+@@ -1873,16 +1864,28 @@ export function MainAppRoute({
+           active: editorOpen && !editorCard,
+           variant: "default",
+         },
+-        {
+-          id: "settings",
+-          label: "Open settings",
+-          onClick: handleOpenSettings,
+-          active: settingsOpen,
+-          variant: "outline",
+-          icon: Settings2,
+-          iconOnly: true,
+-        },
+       ],
++      areaHeader: {
++        title: "Decks",
++        actions: [
++          {
++            id: "add-deck",
++            label: "Add deck",
++            onClick: handleDesktopAddDeckClick,
++            active: createDeckOpen,
++            variant: "outline",
++          },
++          {
++            id: "settings",
++            label: "Open settings",
++            onClick: handleOpenSettings,
++            active: settingsOpen,
++            variant: "outline",
++            icon: Settings2,
++            iconOnly: true,
++          },
++        ],
++      },
+     }),
+     [
+       editorCard,
+diff --git a/frontend-react/src/features/decks/types.ts b/frontend-react/src/features/decks/types.ts
+index 9363191..ab8aa53 100644
+--- a/frontend-react/src/features/decks/types.ts
++++ b/frontend-react/src/features/decks/types.ts
+@@ -25,6 +25,10 @@ export type DeckScreenHeaderModel = {
+   titleMeta?: ReactNode;
+   leadingActions?: readonly DeckScreenAction[];
+   trailingActions?: readonly DeckScreenAction[];
++  areaHeader?: {
++    title: string;
++    actions: readonly DeckScreenAction[];
++  };
+ };
+ 
+ export type DeckScreenDockModel = {

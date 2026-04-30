@@ -1,0 +1,182 @@
+diff --git a/frontend-react/src/features/decks/components/DeckDesktopMenu.test.tsx b/frontend-react/src/features/decks/components/DeckDesktopMenu.test.tsx
+index 2bc6dc0..618738e 100644
+--- a/frontend-react/src/features/decks/components/DeckDesktopMenu.test.tsx
++++ b/frontend-react/src/features/decks/components/DeckDesktopMenu.test.tsx
+@@ -64,6 +64,32 @@ describe("DeckDesktopMenu", () => {
+     expect(navigationButton).toHaveTextContent("Decks");
+   });
+ 
++  it("renders the header without an outer card frame", () => {
++    const { container } = render(
++      <DeckDesktopMenu
++        model={{
++          navigationLabel: "Decks",
++          onNavigation: vi.fn(),
++          trailingActions: [
++            { id: "add-deck", label: "Add deck", onClick: vi.fn(), variant: "default" },
++            {
++              id: "settings",
++              label: "Open settings",
++              onClick: vi.fn(),
++              iconOnly: true,
++            },
++          ],
++        }}
++      />,
++    );
++
++    const header = container.querySelector("section");
++    expect(header).toHaveClass("min-w-0");
++    expect(header).not.toHaveClass("rounded-2xl");
++    expect(header).not.toHaveClass("bg-card/80");
++    expect(screen.queryByTestId("deck-area-header")).not.toBeInTheDocument();
++  });
++
+   it("can hide the navigation button", () => {
+     render(
+       <DeckDesktopMenu
+diff --git a/frontend-react/src/features/decks/components/DeckDesktopMenu.tsx b/frontend-react/src/features/decks/components/DeckDesktopMenu.tsx
+index 2d8c7d9..70df74a 100644
+--- a/frontend-react/src/features/decks/components/DeckDesktopMenu.tsx
++++ b/frontend-react/src/features/decks/components/DeckDesktopMenu.tsx
+@@ -116,7 +116,7 @@ export function DeckDesktopMenu({ model }: { model: DeckScreenHeaderModel }) {
+   ) : null;
+ 
+   return (
+-    <section className="min-w-0 rounded-2xl border border-border/70 bg-card/80 p-1.5 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-background/90 lg:border-0 lg:bg-transparent lg:p-0 lg:shadow-none">
++    <section className="min-w-0">
+       <div className="flex min-w-0 flex-col gap-2">
+         <div className="flex flex-col gap-2 lg:grid lg:min-w-0 lg:grid-cols-[minmax(0,1fr)_minmax(0,16rem)_minmax(0,1fr)] lg:items-center lg:gap-1">
+           {titleBlock ? (
+diff --git a/frontend-react/src/features/decks/components/MainAppRoute.test.tsx b/frontend-react/src/features/decks/components/MainAppRoute.test.tsx
+index f509530..46e49a5 100644
+--- a/frontend-react/src/features/decks/components/MainAppRoute.test.tsx
++++ b/frontend-react/src/features/decks/components/MainAppRoute.test.tsx
+@@ -510,11 +510,11 @@ describe('MainAppRoute', () => {
+     expect(screen.getByRole('button', { name: 'Chemistry' })).toBeInTheDocument()
+   })
+ 
+-  it('does not show the add-deck action on the deck browser home', async () => {
++  it('shows the add-deck action on the deck browser home', async () => {
+     renderDecksRoute()
+ 
+     expect(await screen.findByRole('button', { name: 'Biology' })).toBeInTheDocument()
+-    expect(screen.queryByRole('button', { name: 'Add deck' })).not.toBeInTheDocument()
++    expect(screen.getByRole('button', { name: 'Add deck' })).toBeInTheDocument()
+   })
+ 
+   it('lets you switch decks from the deck browser and syncs the cards route', async () => {
+@@ -1623,23 +1623,26 @@ describe('MainAppRoute', () => {
+     expect(screen.getByText('Unflip the current study card or revert the last study answer.')).toBeInTheDocument()
+   })
+ 
+-  it('shows deck actions in their own desktop area header', async () => {
++  it('shows deck browser actions in one desktop header row', async () => {
+     renderDecksRoute()
+ 
+     await screen.findByRole('button', { name: 'Biology' })
+ 
+-    const deckAreaHeader = screen.getByTestId('deck-area-header')
+-    const deckAreaTitle = screen.getByTestId('deck-area-header-title')
+     expect(screen.queryByRole('button', { name: 'Nocards' })).not.toBeInTheDocument()
+     expect(screen.queryByRole('button', { name: 'Home' })).not.toBeInTheDocument()
+-    expect(screen.getByRole('button', { name: 'Add card' })).toBeInTheDocument()
+-    expect(deckAreaHeader).toHaveClass('grid', 'grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]')
+-    expect(deckAreaTitle).toHaveClass('justify-self-center', 'text-center')
+-    expect(within(deckAreaTitle).getByText('Decks')).toBeInTheDocument()
+-    expect(deckAreaTitle.querySelector('svg')).not.toBeNull()
+-    expect(within(deckAreaHeader).queryByRole('button', { name: 'Add deck' })).not.toBeInTheDocument()
+-    expect(within(deckAreaHeader).getByRole('button', { name: 'Open settings' })).toBeInTheDocument()
+-    expect(within(deckAreaHeader).queryByRole('button', { name: 'Add card' })).not.toBeInTheDocument()
++    const decksButton = screen.getByRole('button', { name: 'Decks' })
++    expect(decksButton).toHaveTextContent('Decks')
++    expect(decksButton.querySelector('svg')).not.toBeNull()
++    const addDeckButton = screen.getByRole('button', { name: 'Add deck' })
++    const settingsButton = screen.getByRole('button', { name: 'Open settings' })
++    expect(addDeckButton).toBeInTheDocument()
++    expect(settingsButton).toBeInTheDocument()
++    expect(decksButton.compareDocumentPosition(addDeckButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
++    expect(addDeckButton.compareDocumentPosition(settingsButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
++    expect(screen.queryByRole('button', { name: 'Add card' })).not.toBeInTheDocument()
++    expect(screen.queryByTestId('deck-area-header')).not.toBeInTheDocument()
++    fireEvent.click(addDeckButton)
++    expect(await screen.findByRole('dialog', { name: 'Add deck' })).toBeInTheDocument()
+     expect(screen.getByText('Name')).toBeInTheDocument()
+     expect(screen.queryByText('Go Back')).not.toBeInTheDocument()
+     expect(screen.queryByRole('textbox', { name: 'Search decks' })).not.toBeInTheDocument()
+diff --git a/frontend-react/src/features/decks/components/MainAppRoute.tsx b/frontend-react/src/features/decks/components/MainAppRoute.tsx
+index 241508b..237aba7 100644
+--- a/frontend-react/src/features/decks/components/MainAppRoute.tsx
++++ b/frontend-react/src/features/decks/components/MainAppRoute.tsx
+@@ -6,7 +6,6 @@ import {
+   BookOpen,
+   Command,
+   Flame,
+-  Folder,
+   Home,
+   LoaderCircle,
+   LogIn,
+@@ -1962,6 +1961,10 @@ export function MainAppRoute({
+     openCreateCard();
+   }, [openCreateCard]);
+ 
++  const handleDesktopAddDeckClick = React.useCallback(() => {
++    setCreateDeckOpen(true);
++  }, []);
++
+   const handleOpenSettings = React.useCallback(() => {
+     setSettingsOpen(true);
+   }, []);
+@@ -2878,36 +2881,29 @@ export function MainAppRoute({
+     () => ({
+       navigationLabel: "Decks",
+       onNavigation: handleOpenDecksHome,
+-      showNavigation: false,
+       trailingActions: [
+         {
+-          id: "add-card",
+-          label: "Add card",
+-          onClick: handleDesktopAddCardClick,
+-          active: editorOpen && !editorCard,
++          id: "add-deck",
++          label: "Add deck",
++          onClick: handleDesktopAddDeckClick,
++          active: createDeckOpen,
+           variant: "default",
++          icon: Plus,
++        },
++        {
++          id: "settings",
++          label: "Open settings",
++          onClick: handleOpenSettings,
++          active: settingsOpen,
++          variant: "outline",
++          icon: Settings2,
++          iconOnly: true,
+         },
+       ],
+-      areaHeader: {
+-        title: "Decks",
+-        icon: Folder,
+-        actions: [
+-          {
+-            id: "settings",
+-            label: "Open settings",
+-            onClick: handleOpenSettings,
+-            active: settingsOpen,
+-            variant: "outline",
+-            icon: Settings2,
+-            iconOnly: true,
+-          },
+-        ],
+-      },
+     }),
+     [
+-      editorCard,
+-      editorOpen,
+-      handleDesktopAddCardClick,
++      createDeckOpen,
++      handleDesktopAddDeckClick,
+       handleOpenDecksHome,
+       handleOpenSettings,
+       settingsOpen,

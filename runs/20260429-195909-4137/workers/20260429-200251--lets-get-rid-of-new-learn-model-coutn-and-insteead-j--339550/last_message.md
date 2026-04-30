@@ -1,0 +1,71 @@
+# Headful Codex screen capture
+
+This worker ran in the interactive Codex TUI. The final visible pane capture is below.
+
+```text
+
+• lint passed. I’m running the React Router build as the final compile-level check, without deploying.
+
+• Ran bun run --cwd frontend-react build
+  └ Using Vite Environment API (experimental)
+    vite v8.0.3 building client environment for production...
+    … +107 lines (ctrl + t to view transcript)
+
+    ✓ built in 585ms
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• build passed with the repo’s existing Vite chunk-size and sql.js externalization warnings. I’m checking the final worktree status and diff now so the worker handoff is exact.
+
+• Ran git status --short
+  └  M frontend-react/src/features/decks/components/DeckBrowserTable.test.tsx
+     M frontend-react/src/features/decks/components/DeckBrowserTable.tsx
+    … +6 lines (ctrl + t to view transcript)
+     M frontend-react/src/shared/ui/review-state-summary.test.tsx
+     M frontend-react/src/shared/ui/review-state-summary.tsx
+
+• Ran git diff --stat
+  └  .../decks/components/DeckBrowserTable.test.tsx     |  15 ++-
+     .../features/decks/components/DeckBrowserTable.tsx |  69 ++++++------
+    … +7 lines (ctrl + t to view transcript)
+     .../src/shared/ui/review-state-summary.tsx         |  74 ++++++++++---
+     10 files changed, 301 insertions(+), 187 deletions(-)
+
+• Explored
+  └ Search New|Learn|Done in DeckBrowserTable.tsx
+
+• Ran git diff --name-only
+  └ frontend-react/src/features/decks/components/DeckBrowserTable.test.tsx
+    frontend-react/src/features/decks/components/DeckBrowserTable.tsx
+    … +6 lines (ctrl + t to view transcript)
+    frontend-react/src/shared/ui/review-state-summary.test.tsx
+    frontend-react/src/shared/ui/review-state-summary.tsx
+
+• Explored
+  └ Read MainAppRoute.tsx
+
+• Ran git diff -- frontend-react/src/shared/ui/review-state-summary.tsx frontend-react/src/features/decks/components/DeckBrowserTable.tsx frontend-react/src/features/study/components/StudyControls.tsx frontend-react/src/features/study/components/
+  │ StudyDeckOverlay.tsx frontend-react/src/features/decks/components/MainAppRoute.tsx | sed -n '1,260p'
+  └ diff --git a/frontend-react/src/features/decks/components/DeckBrowserTable.tsx b/frontend-react/src/features/decks/components/DeckBrowserTable.tsx
+    index 32c5df8..e2321ff 100644
+    … +256 lines (ctrl + t to view transcript)
+    @@ -76,6 +81,8 @@ export function StudyControls({
+       const compactWrongLabel = compactReviewButtonLabel(wrongButtonText, "↺");
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• Summary:
+
+  - Replaced visible New / Learn / Done review summaries with a single Progress #/# display.
+  - #/# uses remaining cards on the left and total cards on the right, based on total - done.
+  - Updated deck browser desktop/mobile columns, selected-deck headers, mobile study title stack, and study footer summary.
+  - Kept underlying scheduler/count state intact.
+
+  Files changed:
+Token usage: total=226,242 input=192,514 (+ 8,082,688 cached) output=33,728 (reasoning 11,685)
+To continue this session, run codex resume 019ddbb2-1642-7f32-b810-f23275ee09cb
+
+
+
+
+```

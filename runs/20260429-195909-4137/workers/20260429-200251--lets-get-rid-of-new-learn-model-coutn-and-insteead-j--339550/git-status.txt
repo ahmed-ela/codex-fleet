@@ -1,0 +1,10 @@
+ M frontend-react/src/features/decks/components/DeckBrowserTable.test.tsx
+ M frontend-react/src/features/decks/components/DeckBrowserTable.tsx
+ M frontend-react/src/features/decks/components/MainAppRoute.test.tsx
+ M frontend-react/src/features/decks/components/MainAppRoute.tsx
+ M frontend-react/src/features/study/components/StudyControls.test.tsx
+ M frontend-react/src/features/study/components/StudyControls.tsx
+ M frontend-react/src/features/study/components/StudyDeckOverlay.test.tsx
+ M frontend-react/src/features/study/components/StudyDeckOverlay.tsx
+ M frontend-react/src/shared/ui/review-state-summary.test.tsx
+ M frontend-react/src/shared/ui/review-state-summary.tsx

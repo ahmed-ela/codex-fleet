@@ -1,0 +1,359 @@
+diff --git a/frontend-react/src/features/decks/components/MainAppRoute.test.tsx b/frontend-react/src/features/decks/components/MainAppRoute.test.tsx
+index 8cef6db..f945553 100644
+--- a/frontend-react/src/features/decks/components/MainAppRoute.test.tsx
++++ b/frontend-react/src/features/decks/components/MainAppRoute.test.tsx
+@@ -233,18 +233,15 @@ function seedQuerySnapshot(key: string, value: unknown) {
+   )
+ }
+ 
+-function renderRoute({
+-  pathname = '/',
+-  searchParams = new URLSearchParams(),
+-  routeMode = pathname.startsWith('/cards') ? 'cards' : 'decks',
+-  routeDeckId = null,
+-}: {
++type RenderRouteOptions = {
+   pathname?: string
+   searchParams?: URLSearchParams
+   routeMode?: 'decks' | 'cards'
+   routeDeckId?: string | null
+-} = {}) {
+-  const queryClient = new QueryClient({
++}
++
++function createRouteQueryClient() {
++  return new QueryClient({
+     defaultOptions: {
+       queries: {
+         retry: false,
+@@ -252,8 +249,18 @@ function renderRoute({
+       },
+     },
+   })
++}
+ 
+-  return render(
++function routeElement(
++  {
++    pathname = '/',
++    searchParams = new URLSearchParams(),
++    routeMode = pathname.startsWith('/cards') ? 'cards' : 'decks',
++    routeDeckId = null,
++  }: RenderRouteOptions = {},
++  queryClient: QueryClient,
++) {
++  return (
+     <QueryClientProvider client={queryClient}>
+       <AppRoutingProvider
+         router={{ replace: replaceMock }}
+@@ -267,10 +274,27 @@ function renderRoute({
+           imageOcclusionEnabled={false}
+         />
+       </AppRoutingProvider>
+-    </QueryClientProvider>,
++    </QueryClientProvider>
+   )
+ }
+ 
++function renderRoute({
++  pathname = '/',
++  searchParams = new URLSearchParams(),
++  routeMode = pathname.startsWith('/cards') ? 'cards' : 'decks',
++  routeDeckId = null,
++}: RenderRouteOptions = {}) {
++  const queryClient = createRouteQueryClient()
++  const initialOptions = { pathname, searchParams, routeMode, routeDeckId }
++  const result = render(routeElement(initialOptions, queryClient))
++
++  return {
++    ...result,
++    rerenderRoute: (nextOptions: RenderRouteOptions = {}) =>
++      result.rerender(routeElement(nextOptions, queryClient)),
++  }
++}
++
+ function renderDecksRoute() {
+   return renderRoute({
+     pathname: '/',
+@@ -786,7 +810,7 @@ describe('MainAppRoute', () => {
+     const studyControls = screen.getByLabelText('Study controls')
+     expect(within(studyControls).getByText((_content, node) => node?.textContent === 'New 1')).toBeInTheDocument()
+     expect(within(studyControls).getByText((_content, node) => node?.textContent === 'Learn 0')).toBeInTheDocument()
+-    expect(within(studyControls).getByText((_content, node) => node?.textContent === 'Due 0')).toBeInTheDocument()
++    expect(within(studyControls).queryByText((_content, node) => node?.textContent === 'Due 0')).not.toBeInTheDocument()
+     fireEvent.keyDown(studySurface, { key: ' ', code: 'Space' })
+     fireEvent.click(within(studyControls).getByRole('button', { name: /^Good\b/ }))
+ 
+@@ -852,6 +876,50 @@ describe('MainAppRoute', () => {
+     })
+   })
+ 
++  it('keeps deck-browser counts current from selected deck activity while review activity is refreshing', async () => {
++    seedStore([
++      buildCard('card-new', ['tag-bio'], ['Biology'], 'New card', '2026-04-14T00:00:01.000Z'),
++      buildCard('card-learn', ['tag-bio'], ['Biology'], 'Learn card', '2026-04-14T00:00:02.000Z'),
++    ])
++    seedReviewStates({
++      'card-learn': {
++        cardId: 'card-learn',
++        bucket: 'learn',
++        lastReviewedAt: '2026-04-14T00:00:00.000Z',
++        dueAt: '2999-04-14T00:10:00.000Z',
++      },
++    })
++    const activityByIdsDeferred = createDeferred<Awaited<ReturnType<typeof api.getCardActivityByIds>>>()
++    vi.spyOn(api, 'getCardActivityByIds').mockImplementationOnce(() => activityByIdsDeferred.promise)
++
++    const route = renderCardsRoute()
++    await waitForPreviewCards(2)
++    await waitFor(() => expectVisibleCountLabel('Learn 1'))
++
++    route.rerenderRoute({
++      pathname: '/',
++      routeMode: 'decks',
++    })
++
++    const biologyRow = await screen.findByRole('button', { name: 'Biology' })
++    await waitFor(() => {
++      expectDeckBrowserStat(biologyRow, 'New', 1)
++      expectDeckBrowserStat(biologyRow, 'Learn', 1)
++    })
++
++    await act(async () => {
++      activityByIdsDeferred.resolve([
++        {
++          id: 'card-learn',
++          parentCardId: null,
++          tagIds: ['tag-bio'],
++          createdAt: '2026-04-14T00:00:02.000Z',
++        },
++      ])
++      await activityByIdsDeferred.promise
++    })
++  })
++
+   it('restores review progress and review logs when Cmd+Z undoes a committed study answer', async () => {
+     process.env.SIMPLECARDS_ENABLE_STUDY_MODE = '1'
+     const deleteStudyReviewLogsSpy = vi.spyOn(api, 'deleteStudyReviewLogs')
+@@ -1001,7 +1069,7 @@ describe('MainAppRoute', () => {
+     const studyControls = screen.getByLabelText('Study controls')
+     expect(within(studyControls).getByText((_content, node) => node?.textContent === 'New 1')).toBeInTheDocument()
+     expect(within(studyControls).getByText((_content, node) => node?.textContent === 'Learn 0')).toBeInTheDocument()
+-    expect(within(studyControls).getByText((_content, node) => node?.textContent === 'Due 0')).toBeInTheDocument()
++    expect(within(studyControls).queryByText((_content, node) => node?.textContent === 'Due 0')).not.toBeInTheDocument()
+ 
+     fireEvent.keyDown(studySurface, { key: ' ', code: 'Space' })
+     fireEvent.click(within(studyControls).getByRole('button', { name: /^Good\b/ }))
+diff --git a/frontend-react/src/features/decks/components/MainAppRoute.tsx b/frontend-react/src/features/decks/components/MainAppRoute.tsx
+index aeb0e4c..7cd2f59 100644
+--- a/frontend-react/src/features/decks/components/MainAppRoute.tsx
++++ b/frontend-react/src/features/decks/components/MainAppRoute.tsx
+@@ -369,6 +369,55 @@ function toStudySeedCard(card: CardActivity): Card {
+   };
+ }
+ 
++function mergeCardActivityById(...sources: readonly CardActivity[][]) {
++  const byId = new Map<string, CardActivity>();
++
++  for (const source of sources) {
++    for (const card of source) {
++      const previous = byId.get(card.id);
++      if (!previous) {
++        byId.set(card.id, {
++          ...card,
++          tagIds: dedupeDeckIds(card.tagIds),
++        });
++        continue;
++      }
++
++      byId.set(card.id, {
++        ...previous,
++        parentCardId: previous.parentCardId ?? card.parentCardId,
++        tagIds: dedupeDeckIds([...previous.tagIds, ...card.tagIds]),
++        studyMs: Math.max(
++          normalizeStudyTimeMs(previous.studyMs),
++          normalizeStudyTimeMs(card.studyMs),
++        ),
++        cramMs: Math.max(
++          normalizeStudyTimeMs(previous.cramMs),
++          normalizeStudyTimeMs(card.cramMs),
++        ),
++      });
++    }
++  }
++
++  return Array.from(byId.values());
++}
++
++function sameCardActivity(left: CardActivity, right: CardActivity) {
++  return (
++    left.id === right.id &&
++    left.parentCardId === right.parentCardId &&
++    left.createdAt === right.createdAt &&
++    normalizeStudyTimeMs(left.studyMs) === normalizeStudyTimeMs(right.studyMs) &&
++    normalizeStudyTimeMs(left.cramMs) === normalizeStudyTimeMs(right.cramMs) &&
++    left.tagIds.length === right.tagIds.length &&
++    left.tagIds.every((tagId, index) => tagId === right.tagIds[index])
++  );
++}
++
++function sameCardActivityList(left: readonly CardActivity[], right: readonly CardActivity[]) {
++  return left.length === right.length && left.every((card, index) => sameCardActivity(card, right[index]!));
++}
++
+ function matchesDeckSelection(cardDeckIds: readonly string[], selectedDeckIds: readonly string[]) {
+   return selectedDeckIds.length === 0 || cardDeckIds.some((deckId) => selectedDeckIds.includes(deckId));
+ }
+@@ -593,6 +642,7 @@ export function MainAppRoute({
+   const [deckDropActive, setDeckDropActive] = React.useState(false);
+   const [desktopViewport, setDesktopViewport] = React.useState(false);
+   const [reviewStates, setReviewStates] = React.useState<CardReviewStateSnapshot>({});
++  const [knownReviewCardActivity, setKnownReviewCardActivity] = React.useState<CardActivity[]>([]);
+   const reviewStatesRef = React.useRef<CardReviewStateSnapshot>({});
+   const studyAnswerUndoStateRef = React.useRef(
+     new Map<string, { previousState: CardReviewState | null }>(),
+@@ -1175,11 +1225,35 @@ export function MainAppRoute({
+   );
+   const loadedCards = filteredCards;
+   const hasMoreCards = Boolean(cardsPageQuery.hasNextPage);
++  const selectedReviewCardActivity = React.useMemo(
++    () => selectedCardActivity.filter((card) => Boolean(reviewStates[card.id])),
++    [reviewStates, selectedCardActivity],
++  );
++  React.useEffect(() => {
++    const knownNextActivity = mergeCardActivityById(
++      reviewStateCardActivity,
++      selectedReviewCardActivity,
++    );
++    if (knownNextActivity.length === 0) return;
++
++    setKnownReviewCardActivity((previous) => {
++      const next = mergeCardActivityById(previous, knownNextActivity);
++      return sameCardActivityList(previous, next) ? previous : next;
++    });
++  }, [reviewStateCardActivity, selectedReviewCardActivity]);
++  const allDeckReviewActivity = React.useMemo(
++    () => mergeCardActivityById(
++      knownReviewCardActivity,
++      reviewStateCardActivity,
++      selectedReviewCardActivity,
++    ),
++    [knownReviewCardActivity, reviewStateCardActivity, selectedReviewCardActivity],
++  );
+   const allDeckEstimateCards = React.useMemo(
+-    () => reviewStateCardActivity
++    () => allDeckReviewActivity
+       .map(toStudySeedCard)
+       .filter((card) => !hiddenById[card.id]),
+-    [hiddenById, reviewStateCardActivity],
++    [allDeckReviewActivity, hiddenById],
+   );
+   const deckBrowserRows = React.useMemo(
+     () =>
+diff --git a/frontend-react/src/features/study/components/StudyControls.tsx b/frontend-react/src/features/study/components/StudyControls.tsx
+index 8c4494d..200eb45 100644
+--- a/frontend-react/src/features/study/components/StudyControls.tsx
++++ b/frontend-react/src/features/study/components/StudyControls.tsx
+@@ -33,7 +33,6 @@ export function StudyControls({
+   studyEstimateMeta = null,
+   learningCount = 0,
+   unseenCount = 0,
+-  dueCount = 0,
+   onBack = noop,
+   onWrong = noop,
+   onRight = noop,
+@@ -56,7 +55,6 @@ export function StudyControls({
+   studyEstimateMeta?: string | null;
+   learningCount?: number;
+   unseenCount?: number;
+-  dueCount?: number;
+   onBack?: () => void;
+   onWrong?: () => void;
+   onRight?: () => void;
+@@ -190,7 +188,6 @@ export function StudyControls({
+                     items={[
+                       { label: "Learn", value: learningCount, tone: "learn" },
+                       { label: "New", value: unseenCount, tone: "new" },
+-                      { label: "Due", value: dueCount, tone: "due" },
+                     ]}
+                     className="hidden lg:flex"
+                   />
+diff --git a/frontend-react/src/features/study/components/StudyDeckOverlay.test.tsx b/frontend-react/src/features/study/components/StudyDeckOverlay.test.tsx
+index b45c92c..cc01e7d 100644
+--- a/frontend-react/src/features/study/components/StudyDeckOverlay.test.tsx
++++ b/frontend-react/src/features/study/components/StudyDeckOverlay.test.tsx
+@@ -217,7 +217,7 @@ describe('StudyDeckOverlay', () => {
+     expect(await screen.findByRole('button', { name: 'Home' })).toBeInTheDocument()
+     expect(screen.getByText(textContentEquals('Learn 0'))).toBeInTheDocument()
+     expect(screen.getByText(textContentEquals('New 1'))).toBeInTheDocument()
+-    expect(screen.getByText(textContentEquals('Due 0'))).toBeInTheDocument()
++    expect(screen.queryByText(textContentEquals('Due 0'))).not.toBeInTheDocument()
+     expect(screen.queryByText('Covered')).not.toBeInTheDocument()
+     expect(await screen.findAllByTestId('occlusion-cover')).toHaveLength(1)
+     screen.getByTestId('study-stage-surface').focus()
+@@ -733,7 +733,7 @@ describe('StudyDeckOverlay', () => {
+ 
+     expect(await screen.findByText(textContentEquals('Learn 0'))).toBeInTheDocument()
+     expect(screen.getByText(textContentEquals('New 1'))).toBeInTheDocument()
+-    expect(screen.getByText(textContentEquals('Due 1'))).toBeInTheDocument()
++    expect(screen.queryByText(textContentEquals('Due 1'))).not.toBeInTheDocument()
+   })
+ 
+   it('splits remaining cards into learning and unseen when the again interval repeats in the current session', async () => {
+@@ -859,7 +859,7 @@ describe('StudyDeckOverlay', () => {
+     expect(await screen.findByText('Question 1')).toBeInTheDocument()
+     expect(screen.getByText(textContentEquals('Learn 0'))).toBeInTheDocument()
+     expect(screen.getByText(textContentEquals('New 2'))).toBeInTheDocument()
+-    expect(screen.getByText(textContentEquals('Due 0'))).toBeInTheDocument()
++    expect(screen.queryByText(textContentEquals('Due 0'))).not.toBeInTheDocument()
+ 
+     fireEvent.keyDown(screen.getByTestId('study-stage-surface'), { key: ' ', code: 'Space' })
+     expect(screen.getByRole('button', { name: /^Again\b/ })).toHaveAttribute('title', 'Again (10m)')
+@@ -878,7 +878,7 @@ describe('StudyDeckOverlay', () => {
+     )
+     expect(screen.getByText(textContentEquals('Learn 0'))).toBeInTheDocument()
+     expect(screen.getByText(textContentEquals('New 1'))).toBeInTheDocument()
+-    expect(screen.getByText(textContentEquals('Due 0'))).toBeInTheDocument()
++    expect(screen.queryByText(textContentEquals('Due 0'))).not.toBeInTheDocument()
+   })
+ 
+   it('cancels a pending good answer with Cmd+Z before the card advances', async () => {
+@@ -1528,7 +1528,7 @@ describe('StudyDeckOverlay', () => {
+     expect(await screen.findByText('Lazy Question 1')).toBeInTheDocument()
+     await waitFor(() => expect(getCardsByIdsMock).toHaveBeenCalledWith(['card-2']))
+     expect(screen.getByText(textContentEquals('New 1'))).toBeInTheDocument()
+-    expect(screen.getByText(textContentEquals('Due 1'))).toBeInTheDocument()
++    expect(screen.queryByText(textContentEquals('Due 1'))).not.toBeInTheDocument()
+ 
+     fireEvent.keyDown(screen.getByTestId('study-stage-surface'), { key: ' ', code: 'Space' })
+     fireEvent.click(screen.getByRole('button', { name: /^Good\b/ }))
+@@ -1540,7 +1540,7 @@ describe('StudyDeckOverlay', () => {
+     expect(await screen.findByText('Loading card…')).toBeInTheDocument()
+     expect(screen.getByText(textContentEquals('Learn 0'))).toBeInTheDocument()
+     expect(screen.getByText(textContentEquals('New 0'))).toBeInTheDocument()
+-    expect(screen.getByText(textContentEquals('Due 1'))).toBeInTheDocument()
++    expect(screen.queryByText(textContentEquals('Due 1'))).not.toBeInTheDocument()
+     expect(screen.queryByText(textContentEquals('New 2'))).not.toBeInTheDocument()
+ 
+     await act(async () => {
+@@ -1599,7 +1599,7 @@ describe('StudyDeckOverlay', () => {
+     expect(await screen.findByText('Loading card…')).toBeInTheDocument()
+     expect(screen.getByText(textContentEquals('Learn 0'))).toBeInTheDocument()
+     expect(screen.getByText(textContentEquals('New 1'))).toBeInTheDocument()
+-    expect(screen.getByText(textContentEquals('Due 0'))).toBeInTheDocument()
++    expect(screen.queryByText(textContentEquals('Due 0'))).not.toBeInTheDocument()
+     expect(screen.queryByText(textContentEquals('New 2'))).not.toBeInTheDocument()
+ 
+     await act(async () => {
+diff --git a/frontend-react/src/features/study/components/StudyDeckOverlay.tsx b/frontend-react/src/features/study/components/StudyDeckOverlay.tsx
+index 2717f68..35e5bef 100644
+--- a/frontend-react/src/features/study/components/StudyDeckOverlay.tsx
++++ b/frontend-react/src/features/study/components/StudyDeckOverlay.tsx
+@@ -1851,7 +1851,6 @@ export function StudyDeckOverlay({
+             showReviewSummary={!deckMobileViewport}
+             learningCount={effectiveReviewCounts.learnCount}
+             unseenCount={effectiveReviewCounts.newCount}
+-            dueCount={effectiveReviewCounts.dueCount}
+             cardTimeMeta={currentCardTimeMeta}
+             studyEstimateMeta={liveStudyEstimateMeta}
+             onBack={handleClose}

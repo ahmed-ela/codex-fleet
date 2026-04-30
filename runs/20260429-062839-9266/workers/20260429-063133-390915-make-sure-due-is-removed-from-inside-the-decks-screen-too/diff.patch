@@ -1,0 +1,80 @@
+diff --git a/frontend-react/src/features/decks/components/DeckBrowserTable.test.tsx b/frontend-react/src/features/decks/components/DeckBrowserTable.test.tsx
+index c7432c7..ddec912 100644
+--- a/frontend-react/src/features/decks/components/DeckBrowserTable.test.tsx
++++ b/frontend-react/src/features/decks/components/DeckBrowserTable.test.tsx
+@@ -69,7 +69,7 @@ describe("DeckBrowserTable", () => {
+     expect(screen.getByText("Name")).toBeInTheDocument();
+   });
+ 
+-  it("shows due counts in the compact mobile stats", () => {
++  it("omits due counts from the deck browser stats", () => {
+     render(
+       <DeckBrowserTable
+         rows={[baseRow]}
+@@ -83,7 +83,7 @@ describe("DeckBrowserTable", () => {
+       />,
+     );
+ 
+-    expect(screen.getAllByText("Due")).toHaveLength(2);
++    expect(screen.queryByText("Due")).not.toBeInTheDocument();
+   });
+ 
+   it("shows an empty state when no decks match", () => {
+diff --git a/frontend-react/src/features/decks/components/DeckBrowserTable.tsx b/frontend-react/src/features/decks/components/DeckBrowserTable.tsx
+index cbf29a8..c1c01ab 100644
+--- a/frontend-react/src/features/decks/components/DeckBrowserTable.tsx
++++ b/frontend-react/src/features/decks/components/DeckBrowserTable.tsx
+@@ -189,8 +189,8 @@ export function DeckBrowserTable({
+     [expandedById, rows],
+   );
+   const desktopGridColumns = showStudyTimeColumns
+-    ? "lg:grid-cols-[minmax(0,1fr)_4rem_4rem_4rem_7.5rem_7.5rem_2.25rem]"
+-    : "lg:grid-cols-[minmax(0,1fr)_4rem_4rem_4rem_2.25rem]";
++    ? "lg:grid-cols-[minmax(0,1fr)_4rem_4rem_7.5rem_7.5rem_2.25rem]"
++    : "lg:grid-cols-[minmax(0,1fr)_4rem_4rem_2.25rem]";
+ 
+   return (
+     <section className="flex h-auto min-h-0 min-w-0 max-h-[min(60svh,32rem)] flex-col overflow-hidden rounded-[1.25rem] border border-border/70 bg-card/80 shadow-[0_16px_42px_rgb(15_23_42_/_0.08)] sm:max-h-[min(68svh,34rem)] sm:rounded-2xl lg:h-auto lg:max-h-[min(52svh,38rem)]">
+@@ -200,7 +200,6 @@ export function DeckBrowserTable({
+         </div>
+         <div className="pr-1 text-right text-foreground">New</div>
+         <div className="pr-1 text-right text-foreground">Learn</div>
+-        <div className="pr-1 text-right text-foreground">Due</div>
+         {showStudyTimeColumns ? (
+           <>
+             <div className="pr-1 text-right text-foreground">Time</div>
+@@ -290,11 +289,6 @@ export function DeckBrowserTable({
+                     value={row.learnCount}
+                     activeClassName="text-rose-600"
+                   />
+-                  <MobileStatPill
+-                    label="Due"
+-                    value={row.dueCount}
+-                    activeClassName="text-emerald-600"
+-                  />
+                   {showStudyTimeColumns ? (
+                     <>
+                       {getStudyTimeTotalMs(row) > 0 ? (
+@@ -318,9 +312,6 @@ export function DeckBrowserTable({
+               <div className="hidden lg:block">
+                 <CountCell value={row.learnCount} activeClassName="text-rose-600" />
+               </div>
+-              <div className="hidden lg:block">
+-                <CountCell value={row.dueCount} activeClassName="text-emerald-600" />
+-              </div>
+               {showStudyTimeColumns ? (
+                 <>
+                   <div className="hidden lg:block">
+diff --git a/frontend-react/src/features/decks/components/MainAppRoute.test.tsx b/frontend-react/src/features/decks/components/MainAppRoute.test.tsx
+index 0892b4c..a0f30cb 100644
+--- a/frontend-react/src/features/decks/components/MainAppRoute.test.tsx
++++ b/frontend-react/src/features/decks/components/MainAppRoute.test.tsx
+@@ -387,7 +387,7 @@ describe('MainAppRoute', () => {
+ 
+     expect(await screen.findByRole('button', { name: 'Biology' })).toBeInTheDocument()
+     expect(screen.getAllByText('Learn').length).toBeGreaterThan(0)
+-    expect(screen.getAllByText('Due').length).toBeGreaterThan(0)
++    expect(screen.queryByText('Due')).not.toBeInTheDocument()
+ 
+     await selectDeck('Biology', 'tag-bio')
+   })

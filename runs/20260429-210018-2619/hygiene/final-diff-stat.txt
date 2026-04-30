@@ -1,0 +1,15 @@
+ .../decks/components/DeckBrowserTable.test.tsx     |  49 +++-
+ .../features/decks/components/DeckBrowserTable.tsx |  78 +++----
+ .../decks/components/MainAppRoute.test.tsx         | 182 ++++++++++-----
+ .../src/features/decks/components/MainAppRoute.tsx |  88 ++++----
+ .../study/components/StudyControls.test.tsx        |  23 +-
+ .../features/study/components/StudyControls.tsx    |  33 +--
+ .../study/components/StudyDeckOverlay.test.tsx     | 247 +++++++++++++--------
+ .../features/study/components/StudyDeckOverlay.tsx | 168 ++------------
+ .../StudySchedulerSettingsPanel.test.tsx           |   9 +-
+ .../components/StudySchedulerSettingsPanel.tsx     | 121 ++++------
+ .../src/features/study/lib/studySession.test.ts    |  13 ++
+ .../src/features/study/lib/studySession.ts         |  12 +
+ .../src/shared/ui/review-state-summary.test.tsx    |   7 +-
+ .../src/shared/ui/review-state-summary.tsx         |  80 ++++++-
+ 14 files changed, 610 insertions(+), 500 deletions(-)

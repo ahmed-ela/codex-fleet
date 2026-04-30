@@ -1,0 +1,734 @@
+diff --git a/frontend-react/src/lib/server/simplecardsStore.ts b/frontend-react/src/lib/server/simplecardsStore.ts
+index 2e41c5e..9d34505 100644
+--- a/frontend-react/src/lib/server/simplecardsStore.ts
++++ b/frontend-react/src/lib/server/simplecardsStore.ts
+@@ -1,31 +1,18 @@
+ import type { SupabaseClient } from '@supabase/supabase-js'
+ import { collectChainDescendantCardIds } from '@/features/cards/lib/cardChains'
+-import { previewContent } from '@/features/cards/lib/preview'
+-import type { SavedStudySession } from '@/features/study/lib/studySessionStore'
+ import type { SerializedStudySession } from '@/features/study/lib/studySession'
+-import { getAssetVariantRef, getOriginalAssetRef } from '@/lib/assetVariants'
+-import { dedupeDeckIds, deriveCardDeckFields, normalizeDeckName, normalizeDeckNameKey } from '@/lib/decks'
++import { dedupeDeckIds, normalizeDeckName, normalizeDeckNameKey } from '@/lib/decks'
+ import { DEFAULT_CARD_SORT_MODE, normalizeCardSortMode, type CardSortMode } from '@/lib/cardSort'
+-import { collectCardCleanupRefs, createSignedUrls, deleteStorageRefs } from './simplecardsAssets'
+-import { parseStorageMarker, storageRefToMarker } from '@/lib/storageRef'
+-import {
+-  addStudyTimeTotals,
+-  getStudyTimeTotalMs,
+-  normalizeStudyTimeMs,
+-  summarizeStudyTimeEntries,
+-} from '@/features/study/lib/studyTime'
++import { collectCardCleanupRefs, deleteStorageRefs } from './simplecardsAssets'
++import { normalizeStudyTimeMs, summarizeStudyTimeEntries } from '@/features/study/lib/studyTime'
+ import {
+   normalizeReviewDurationMs,
+   normalizeReviewedAt,
+   normalizeStudyReviewLogEntries,
+ } from '@/features/study/lib/studyReviewLogs'
+ import type {
+-  Card,
+   CardActivity,
+-  CardPageItem,
+   CardPageResult,
+-  CardPreview,
+-  Deck,
+   DeckActivityRollup,
+   LibraryBootstrap,
+   StudyReviewLog,
+@@ -34,344 +21,71 @@ import type {
+   StudyTimeEntry,
+   StudyTimeMode,
+   StudyTimeSummary,
+-  Tag,
+ } from '@/lib/types'
+-
+-const TAGS_TABLE = 'card_tags'
+-const CARD_TAG_LINKS_TABLE = 'card_tag_links'
+-const STUDY_SESSIONS_TABLE = 'simplecards_study_sessions'
+-const STUDY_TIME_TABLE = 'simplecards_study_time'
+-const STUDY_REVIEW_LOGS_TABLE = 'simplecards_review_logs'
+-const CARDS_TABLE = 'simplecards_cards'
+-const HIDDEN_CARDS_TABLE = 'simplecards_hidden_cards'
+-const CARD_COLUMNS =
+-  'id,deck_id,parent_card_id,folder_path,folder_path_ids,folder_path_names,tag_ids,tag_names,tag_paths,question,answer,question_preview,answer_preview,created_at,updated_at'
+-const CARD_PAGE_COLUMNS =
+-  'id,parent_card_id,tag_ids,tag_names,question_preview,answer_preview,created_at,updated_at'
+-const CARD_PAGE_FALLBACK_COLUMNS = 'id,question,answer'
+-const CARD_ACTIVITY_COLUMNS = 'id,parent_card_id,tag_ids,created_at'
+-const TAG_COLUMNS = 'id,name,normalized_name,created_at,updated_at'
+-const STUDY_SESSION_COLUMNS = 'session_key,session_id,started_at,queue_ids,queue_index,flipped,delayed_repeat_cards,updated_at'
+-const STUDY_TIME_COLUMNS = 'card_id,study_ms,cram_ms,updated_at'
+-const STUDY_REVIEW_LOG_COLUMNS = 'id,card_id,mode,result,duration_ms,reviewed_at,session_id,previous_state,next_state,created_at'
+-const STUDY_TIME_CARD_ID_FILTER_LIMIT = 500
+-const STUDY_TIME_PAGE_SIZE = 1000
+-
+-type TagRow = {
+-  id: string
+-  name: string
+-  normalized_name: string
+-  created_at: string
+-  updated_at: string
+-}
+-
+-type CardRow = {
+-  id: string
+-  deck_id: string | null
+-  parent_card_id: string | null
+-  folder_path: string | null
+-  folder_path_ids: string[] | null
+-  folder_path_names: string[] | null
+-  tag_ids: string[] | null
+-  tag_names: string[] | null
+-  tag_paths: string[] | null
+-  question: string
+-  answer: string
+-  question_preview: unknown
+-  answer_preview: unknown
+-  created_at: string
+-  updated_at: string
+-}
+-
+-type CardActivityRow = Pick<CardRow, 'id' | 'parent_card_id' | 'tag_ids' | 'created_at'>
+-type CardPageRow = Pick<
+-  CardRow,
+-  | 'id'
+-  | 'parent_card_id'
+-  | 'tag_ids'
+-  | 'tag_names'
+-  | 'question_preview'
+-  | 'answer_preview'
+-  | 'created_at'
+-  | 'updated_at'
+->
+-
+-type CardPageFallbackRow = Pick<CardRow, 'id' | 'question' | 'answer'>
+-
+-type CardTagLinkRow = {
+-  user_id: string
+-  card_id: string
+-  tag_id: string
+-  created_at: string
+-}
+-
+-type HiddenCardRow = {
+-  user_id: string
+-  card_id: string
+-  created_at: string
+-}
+-
+-type StudySessionRow = {
+-  session_key: string
+-  session_id: string
+-  started_at: string
+-  queue_ids: string[] | null
+-  queue_index: number | null
+-  flipped: boolean | null
+-  delayed_repeat_cards?: unknown
+-  updated_at: string
+-}
+-
+-type StudyTimeRow = {
+-  card_id: string
+-  study_ms: number | string | null
+-  cram_ms: number | string | null
+-  updated_at: string | null
+-}
+-
+-type StudyReviewLogRow = {
+-  id: string
+-  card_id: string
+-  mode: string | null
+-  result: string | null
+-  duration_ms: number | string | null
+-  reviewed_at: string
+-  session_id: string | null
+-  previous_state: unknown | null
+-  next_state: unknown | null
+-  created_at: string | null
+-}
+-
+-type RpcCardIdRow = { id: string }
+-type TagCountRpcRow = { tag_id: string; total_cards: number | string | null }
+-type DeckRollupRpcRow = {
+-  tag_id: string
+-  total_cards: number | string | null
+-  latest_card_created_at: string | null
+-  study_ms: number | string | null
+-  cram_ms: number | string | null
+-}
+-
+-const EMPTY_PREVIEW: CardPreview = {
+-  text: '',
+-  imageSrc: null,
+-  imageCount: 0,
+-}
+-
+-function dedupeIds(ids: readonly string[]) {
+-  return Array.from(new Set(ids.filter(Boolean)))
+-}
+-
+-function buildStoredPreview(html: string) {
+-  return previewContent(html, 140)
+-}
+-
+-function normalizeStoredPreview(value: unknown): CardPreview {
+-  if (!value || typeof value !== 'object') return EMPTY_PREVIEW
+-  const preview = value as Partial<CardPreview>
+-  return {
+-    text: typeof preview.text === 'string' ? preview.text : '',
+-    imageSrc: typeof preview.imageSrc === 'string' && preview.imageSrc.trim() ? preview.imageSrc : null,
+-    imageCount:
+-      typeof preview.imageCount === 'number' && Number.isFinite(preview.imageCount)
+-        ? Math.max(0, Math.floor(preview.imageCount))
+-        : 0,
+-  }
+-}
+-
+-function isEmptyPreview(preview: CardPreview) {
+-  return !preview.text && !preview.imageSrc && preview.imageCount === 0
+-}
+-
+-function errorMessage(error: unknown) {
+-  return error instanceof Error ? error.message : String(error)
+-}
+-
+-function isMissingRpcFunctionError(error: unknown, functionName: string) {
+-  const message = errorMessage(error).toLowerCase()
+-  const code =
+-    typeof error === 'object' && error !== null && 'code' in error && typeof (error as { code?: unknown }).code === 'string'
+-      ? (error as { code: string }).code
+-      : ''
+-  return code === 'PGRST202' || message.includes(functionName.toLowerCase())
+-}
+-
+-function isMissingHiddenCardsTableError(error: unknown) {
+-  const message = errorMessage(error).toLowerCase()
+-  const code =
+-    typeof error === 'object' && error !== null && 'code' in error && typeof (error as { code?: unknown }).code === 'string'
+-      ? (error as { code: string }).code
+-      : ''
+-  return code === 'PGRST205' || message.includes('simplecards_hidden_cards')
+-}
+-
+-function isMissingStudyTimeTableError(error: unknown) {
+-  const message = errorMessage(error).toLowerCase()
+-  const code =
+-    typeof error === 'object' && error !== null && 'code' in error && typeof (error as { code?: unknown }).code === 'string'
+-      ? (error as { code: string }).code
+-      : ''
+-  return code === 'PGRST205' || message.includes('simplecards_study_time')
+-}
+-
+-function isMissingStudyReviewLogsTableError(error: unknown) {
+-  const message = errorMessage(error).toLowerCase()
+-  const code =
+-    typeof error === 'object' && error !== null && 'code' in error && typeof (error as { code?: unknown }).code === 'string'
+-      ? (error as { code: string }).code
+-      : ''
+-  return code === 'PGRST205' || message.includes('simplecards_review_logs')
+-}
+-
+-function toTag(row: TagRow): Tag {
+-  return {
+-    id: row.id,
+-    name: row.name,
+-    parentId: null,
+-    createdAt: row.created_at,
+-    updatedAt: row.updated_at,
+-  }
+-}
+-
+-function toCard(row: CardRow): Card {
+-  const tagIds = Array.isArray(row.tag_ids) ? row.tag_ids.map(String) : []
+-  const tagNames = Array.isArray(row.tag_names) ? row.tag_names.map(String) : []
+-  const tagPaths = Array.isArray(row.tag_paths) ? row.tag_paths.map(String) : tagNames
+-  const folderPath = tagNames.length > 0 ? tagNames.join(' • ') : row.folder_path ?? ''
+-
+-  return {
+-    id: row.id,
+-    folderId: tagIds[0] ?? row.deck_id ?? null,
+-    parentCardId: row.parent_card_id,
+-    folderPath,
+-    folderPathIds: tagIds.length > 0 ? [...tagIds] : (Array.isArray(row.folder_path_ids) ? row.folder_path_ids.map(String) : []),
+-    folderPathNames: tagNames.length > 0 ? [...tagNames] : (Array.isArray(row.folder_path_names) ? row.folder_path_names.map(String) : []),
+-    tagIds,
+-    tagNames,
+-    tagPaths,
+-    question: row.question,
+-    answer: row.answer,
+-    createdAt: row.created_at,
+-    updatedAt: row.updated_at,
+-  }
+-}
+-
+-function toStudyTimeSummary(row: StudyTimeRow): StudyTimeSummary {
+-  return {
+-    cardId: row.card_id,
+-    studyMs: normalizeStudyTimeMs(row.study_ms),
+-    cramMs: normalizeStudyTimeMs(row.cram_ms),
+-    updatedAt: row.updated_at ?? null,
+-  }
+-}
+-
+-function toStudyReviewLog(row: StudyReviewLogRow): StudyReviewLog {
+-  return {
+-    id: row.id,
+-    cardId: row.card_id,
+-    mode: row.mode === 'cram' ? 'cram' : 'study',
+-    result: row.result === 'wrong' ? 'wrong' : 'right',
+-    durationMs: normalizeReviewDurationMs(row.duration_ms),
+-    reviewedAt: normalizeReviewedAt(row.reviewed_at),
+-    sessionId: row.session_id ?? null,
+-    previousState: row.previous_state ?? null,
+-    nextState: row.next_state ?? null,
+-    createdAt: row.created_at ?? null,
+-  }
+-}
+-
+-function applyStudyTime<T extends { id: string }>(
+-  item: T,
+-  timeByCardId: ReadonlyMap<string, StudyTimeSummary>,
+-) {
+-  const summary = timeByCardId.get(item.id)
+-  if (!summary) return item
+-  const studyMs = normalizeStudyTimeMs(summary.studyMs)
+-  const cramMs = normalizeStudyTimeMs(summary.cramMs)
+-  if (studyMs <= 0 && cramMs <= 0) return item
+-  return {
+-    ...item,
+-    ...(studyMs > 0 ? { studyMs } : {}),
+-    ...(cramMs > 0 ? { cramMs } : {}),
+-  }
+-}
+-
+-function toCardActivity(row: CardActivityRow): CardActivity {
+-  return {
+-    id: row.id,
+-    parentCardId: row.parent_card_id,
+-    tagIds: Array.isArray(row.tag_ids) ? row.tag_ids.map(String) : [],
+-    createdAt: row.created_at,
+-  }
+-}
+-
+-function toCardPageItem(
+-  row: CardPageRow,
+-  fallbackContent?: Pick<CardPageFallbackRow, 'question' | 'answer'> | null,
+-): CardPageItem {
+-  const tagIds = Array.isArray(row.tag_ids) ? row.tag_ids.map(String) : []
+-  const tagNames = Array.isArray(row.tag_names) ? row.tag_names.map(String) : []
+-  const storedQuestionPreview = normalizeStoredPreview(row.question_preview)
+-  const storedAnswerPreview = normalizeStoredPreview(row.answer_preview)
+-
+-  return {
+-    id: row.id,
+-    parentCardId: row.parent_card_id,
+-    tagIds,
+-    tagNames,
+-    questionPreview:
+-      isEmptyPreview(storedQuestionPreview) && fallbackContent?.question
+-        ? buildStoredPreview(fallbackContent.question)
+-        : storedQuestionPreview,
+-    answerPreview:
+-      isEmptyPreview(storedAnswerPreview) && fallbackContent?.answer
+-        ? buildStoredPreview(fallbackContent.answer)
+-        : storedAnswerPreview,
+-    createdAt: row.created_at,
+-    updatedAt: row.updated_at,
+-  }
+-}
+-
+-function toSavedStudySession(row: StudySessionRow): SavedStudySession {
+-  return {
+-    sessionKey: row.session_key,
+-    updatedAt: row.updated_at,
+-    id: row.session_id,
+-    startedAt: row.started_at,
+-    queueIds: Array.isArray(row.queue_ids) ? row.queue_ids.map(String) : [],
+-    index: Math.max(0, row.queue_index ?? 0),
+-    flipped: Boolean(row.flipped),
+-    delayedRepeats: normalizeDelayedStudyRepeats(row.delayed_repeat_cards),
+-  }
+-}
+-
+-function normalizeDelayedStudyRepeats(value: unknown) {
+-  if (!Array.isArray(value)) return []
+-  return value
+-    .map((item) => {
+-      const record = item && typeof item === 'object' ? (item as Record<string, unknown>) : null
+-      const cardId = typeof record?.cardId === 'string' ? record.cardId : ''
+-      const dueAt = typeof record?.dueAt === 'string' ? record.dueAt : ''
+-      return cardId && Number.isFinite(Date.parse(dueAt))
+-        ? { cardId, dueAt: new Date(Date.parse(dueAt)).toISOString() }
+-        : null
+-    })
+-    .filter((item): item is { cardId: string; dueAt: string } => Boolean(item))
+-}
+-
+-function buildCardTagPayload(tagRows: readonly TagRow[]) {
+-  const tagsById = new Map(tagRows.map((tag) => [tag.id, toTag(tag)] as const))
+-  const fields = deriveCardDeckFields(tagRows.map((tag) => tag.id), tagsById)
+-  return {
+-    deck_id: null,
+-    folder_path: fields.folderPath,
+-    folder_path_ids: fields.folderPathIds,
+-    folder_path_names: fields.folderPathNames,
+-    tag_ids: fields.tagIds,
+-    tag_names: fields.tagNames,
+-    tag_paths: fields.tagPaths,
+-  }
+-}
++import {
++  buildDeckPathCountsFromActivity,
++  buildDeckPathCountsFromRollups,
++  buildDeckPathTimesFromActivity,
++  buildDeckPathTimesFromRollups,
++  buildDeckRollups,
++  subtractDeckPathCounts,
++  subtractDeckPathTimes,
++} from './simplecardsStoreDeckRollups'
++import {
++  applyStudyTime,
++  buildCardTagPayload,
++  buildStoredPreview,
++  isEmptyPreview,
++  normalizeDelayedStudyRepeats,
++  normalizeStoredPreview,
++  toCard,
++  toCardActivity,
++  toCardPageItem,
++  toSavedStudySession,
++  toStudyReviewLog,
++  toStudyTimeSummary,
++  toTag,
++} from './simplecardsStoreMappers'
++import {
++  CARD_ACTIVITY_COLUMNS,
++  CARD_COLUMNS,
++  CARD_PAGE_COLUMNS,
++  CARD_PAGE_FALLBACK_COLUMNS,
++  CARD_TAG_LINKS_TABLE,
++  CARDS_TABLE,
++  HIDDEN_CARDS_TABLE,
++  STUDY_REVIEW_LOG_COLUMNS,
++  STUDY_REVIEW_LOGS_TABLE,
++  STUDY_SESSIONS_TABLE,
++  STUDY_SESSION_COLUMNS,
++  STUDY_TIME_CARD_ID_FILTER_LIMIT,
++  STUDY_TIME_COLUMNS,
++  STUDY_TIME_PAGE_SIZE,
++  STUDY_TIME_TABLE,
++  TAGS_TABLE,
++  TAG_COLUMNS,
++  dedupeIds,
++  errorMessage,
++  isMissingHiddenCardsTableError,
++  isMissingRpcFunctionError,
++  isMissingStudyReviewLogsTableError,
++  isMissingStudyTimeTableError,
++  type CardActivityRow,
++  type CardPageFallbackRow,
++  type CardPageRow,
++  type CardRow,
++  type CardTagLinkRow,
++  type DeckRollupRpcRow,
++  type HiddenCardRow,
++  type RpcCardIdRow,
++  type StudyReviewLogRow,
++  type StudySessionRow,
++  type StudyTimeRow,
++  type TagCountRpcRow,
++  type TagRow,
++} from './simplecardsStoreRows'
++
++export { signCardPageItems } from './simplecardsStorePreviews'
+ 
+ async function listTagRows(client: SupabaseClient, userId: string) {
+   const { data, error } = await client.from(TAGS_TABLE).select(TAG_COLUMNS).eq('user_id', userId).order('created_at')
+@@ -548,159 +262,6 @@ async function buildStudyTimeByCardId(
+   }))
+ }
+ 
+-function buildDeckRollups(cards: readonly CardActivity[]) {
+-  const rollups: Record<string, DeckActivityRollup> = {}
+-
+-  for (const card of cards) {
+-    for (const deckId of dedupeDeckIds(card.tagIds)) {
+-      const current = rollups[deckId] ?? { totalCards: 0, latestCardCreatedAt: null }
+-      const studyMs = normalizeStudyTimeMs(current.studyMs) + normalizeStudyTimeMs(card.studyMs)
+-      const cramMs = normalizeStudyTimeMs(current.cramMs) + normalizeStudyTimeMs(card.cramMs)
+-      rollups[deckId] = {
+-        totalCards: current.totalCards + 1,
+-        latestCardCreatedAt:
+-          !current.latestCardCreatedAt || card.createdAt > current.latestCardCreatedAt
+-            ? card.createdAt
+-            : current.latestCardCreatedAt,
+-        ...(studyMs > 0 ? { studyMs } : {}),
+-        ...(cramMs > 0 ? { cramMs } : {}),
+-      }
+-    }
+-  }
+-
+-  return rollups
+-}
+-
+-function buildNodeIdsByTagId(tags: readonly Deck[]) {
+-  const nodeIdsByTagId = new Map<string, string[]>()
+-
+-  for (const tag of tags) {
+-    const segments = normalizeDeckName(tag.name)
+-      .split('/')
+-      .map((segment) => normalizeDeckName(segment))
+-      .filter(Boolean)
+-    if (segments.length === 0) continue
+-
+-    const nodeIds: string[] = []
+-    const keySegments: string[] = []
+-    for (const segment of segments) {
+-      keySegments.push(segment.toLowerCase())
+-      nodeIds.push(keySegments.join('/'))
+-    }
+-    nodeIdsByTagId.set(tag.id, nodeIds)
+-  }
+-
+-  return nodeIdsByTagId
+-}
+-
+-function buildDeckPathCountsFromActivity(tags: readonly Deck[], cards: readonly CardActivity[]) {
+-  const nodeIdsByTagId = buildNodeIdsByTagId(tags)
+-
+-  const counts: Record<string, number> = {}
+-  for (const card of cards) {
+-    const touchedNodeIds = new Set<string>()
+-    for (const deckId of dedupeDeckIds(card.tagIds)) {
+-      for (const nodeId of nodeIdsByTagId.get(deckId) ?? []) {
+-        if (touchedNodeIds.has(nodeId)) continue
+-        touchedNodeIds.add(nodeId)
+-        counts[nodeId] = (counts[nodeId] ?? 0) + 1
+-      }
+-    }
+-  }
+-
+-  return counts
+-}
+-
+-function buildDeckPathTimesFromActivity(tags: readonly Deck[], cards: readonly CardActivity[]) {
+-  const nodeIdsByTagId = buildNodeIdsByTagId(tags)
+-
+-  const times: NonNullable<LibraryBootstrap['deckPathTimes']> = {}
+-  for (const card of cards) {
+-    if (getStudyTimeTotalMs(card) <= 0) continue
+-    const touchedNodeIds = new Set<string>()
+-    for (const deckId of dedupeDeckIds(card.tagIds)) {
+-      for (const nodeId of nodeIdsByTagId.get(deckId) ?? []) {
+-        if (touchedNodeIds.has(nodeId)) continue
+-        touchedNodeIds.add(nodeId)
+-        times[nodeId] = addStudyTimeTotals(times[nodeId], card)
+-      }
+-    }
+-  }
+-
+-  return times
+-}
+-
+-function buildDeckPathCountsFromRollups(tags: readonly Deck[], deckRollups: Readonly<Record<string, DeckActivityRollup>>) {
+-  const nodeIdsByTagId = buildNodeIdsByTagId(tags)
+-
+-  const counts: Record<string, number> = {}
+-  for (const [deckId, rollup] of Object.entries(deckRollups)) {
+-    const totalCards = Math.max(0, Number(rollup.totalCards ?? 0))
+-    if (totalCards <= 0) continue
+-    for (const nodeId of nodeIdsByTagId.get(deckId) ?? []) {
+-      counts[nodeId] = (counts[nodeId] ?? 0) + totalCards
+-    }
+-  }
+-
+-  return counts
+-}
+-
+-function buildDeckPathTimesFromRollups(tags: readonly Deck[], deckRollups: Readonly<Record<string, DeckActivityRollup>>) {
+-  const nodeIdsByTagId = buildNodeIdsByTagId(tags)
+-
+-  const times: NonNullable<LibraryBootstrap['deckPathTimes']> = {}
+-  for (const [deckId, rollup] of Object.entries(deckRollups)) {
+-    if (getStudyTimeTotalMs(rollup) <= 0) continue
+-    for (const nodeId of nodeIdsByTagId.get(deckId) ?? []) {
+-      times[nodeId] = addStudyTimeTotals(times[nodeId], rollup)
+-    }
+-  }
+-
+-  return times
+-}
+-
+-function subtractDeckPathCounts(
+-  counts: Readonly<Record<string, number>>,
+-  hiddenCounts: Readonly<Record<string, number>>,
+-) {
+-  const visibleCounts: Record<string, number> = { ...counts }
+-  for (const [nodeId, hiddenCount] of Object.entries(hiddenCounts)) {
+-    const next = Math.max(0, (visibleCounts[nodeId] ?? 0) - Math.max(0, hiddenCount))
+-    if (next > 0) {
+-      visibleCounts[nodeId] = next
+-    } else {
+-      delete visibleCounts[nodeId]
+-    }
+-  }
+-  return visibleCounts
+-}
+-
+-function subtractDeckPathTimes(
+-  times: Readonly<Record<string, StudyTimeSummary | StudyTimeTotals>>,
+-  hiddenTimes: Readonly<Record<string, StudyTimeTotals>>,
+-) {
+-  const visibleTimes: NonNullable<LibraryBootstrap['deckPathTimes']> = Object.fromEntries(
+-    Object.entries(times).map(([nodeId, totals]) => [nodeId, {
+-      studyMs: normalizeStudyTimeMs(totals.studyMs),
+-      cramMs: normalizeStudyTimeMs(totals.cramMs),
+-    }]),
+-  )
+-
+-  for (const [nodeId, hidden] of Object.entries(hiddenTimes)) {
+-    const current = visibleTimes[nodeId]
+-    if (!current) continue
+-    const studyMs = Math.max(0, normalizeStudyTimeMs(current.studyMs) - normalizeStudyTimeMs(hidden.studyMs))
+-    const cramMs = Math.max(0, normalizeStudyTimeMs(current.cramMs) - normalizeStudyTimeMs(hidden.cramMs))
+-    if (studyMs > 0 || cramMs > 0) {
+-      visibleTimes[nodeId] = { studyMs, cramMs }
+-    } else {
+-      delete visibleTimes[nodeId]
+-    }
+-  }
+-
+-  return visibleTimes
+-}
+-
+ async function listCardRowsByIds(client: SupabaseClient, userId: string, cardIds: readonly string[]) {
+   const ids = dedupeIds(cardIds)
+   if (ids.length === 0) return [] as CardRow[]
+@@ -958,121 +519,6 @@ async function expandChainCardIds(client: SupabaseClient, userId: string, rootId
+   ])
+ }
+ 
+-function signCardPreview(preview: CardPreview, signedUrls: ReadonlyMap<string, string>) {
+-  const src = (preview.imageSrc ?? '').trim()
+-  if (!src) return preview
+-
+-  const ref = parseStorageMarker(src)
+-  if (!ref) return preview
+-
+-  const originalRef = getOriginalAssetRef(ref)
+-  const preferredRef = getAssetVariantRef(ref, 'deck_thumb_v2')
+-  const legacyThumbRef = getAssetVariantRef(ref, 'deck_thumb')
+-  const originalMarker = storageRefToMarker(originalRef)
+-  const preferredMarker = storageRefToMarker(preferredRef)
+-  const preferredSignedUrl = signedUrls.get(preferredMarker) ?? null
+-  if (preferredSignedUrl) {
+-    return {
+-      ...preview,
+-      imageSrc: preferredSignedUrl,
+-      imageRef: originalMarker,
+-      imageVariant: preferredMarker === originalMarker ? 'original' as const : 'deck_thumb_v2' as const,
+-    }
+-  }
+-
+-  const legacyThumbMarker = storageRefToMarker(legacyThumbRef)
+-  const legacyThumbSignedUrl = signedUrls.get(legacyThumbMarker) ?? null
+-  if (legacyThumbSignedUrl) {
+-    return {
+-      ...preview,
+-      imageSrc: legacyThumbSignedUrl,
+-      imageRef: originalMarker,
+-      imageVariant: legacyThumbMarker === originalMarker ? 'original' as const : 'deck_thumb' as const,
+-    }
+-  }
+-
+-  const originalSignedUrl = signedUrls.get(originalMarker) ?? null
+-  if (!originalSignedUrl) return preview
+-
+-  return {
+-    ...preview,
+-    imageSrc: originalSignedUrl,
+-    imageRef: originalMarker,
+-    imageVariant: 'original' as const,
+-  }
+-}
+-
+-export async function signCardPageItems(client: SupabaseClient, items: CardPageItem[]) {
+-  const refs = items.flatMap((item) =>
+-    [item.questionPreview, item.answerPreview]
+-      .map((preview) => (preview.imageSrc ? parseStorageMarker(preview.imageSrc) : null))
+-      .filter((ref): ref is NonNullable<typeof ref> => Boolean(ref)),
+-  )
+-
+-  if (refs.length === 0) return items
+-
+-  const preferredRefs = Array.from(
+-    new Map(refs.map((ref) => {
+-      const preferredRef = getAssetVariantRef(ref, 'deck_thumb_v2')
+-      return [storageRefToMarker(preferredRef), preferredRef] as const
+-    })).values(),
+-  )
+-  const preferredSigned = await createSignedUrls(client, preferredRefs)
+-  const signedByMarker = new Map(
+-    preferredSigned.map((item) => [storageRefToMarker(item.ref), item.signedUrl] as const),
+-  )
+-
+-  type SignedRefEntry = readonly [string, ReturnType<typeof getOriginalAssetRef>]
+-  const legacyThumbRefs = Array.from(
+-    new Map(
+-      refs
+-        .map((ref) => {
+-          const preferredRef = getAssetVariantRef(ref, 'deck_thumb_v2')
+-          const legacyThumbRef = getAssetVariantRef(ref, 'deck_thumb')
+-          const originalRef = getOriginalAssetRef(ref)
+-          if (storageRefToMarker(legacyThumbRef) === storageRefToMarker(originalRef)) return null
+-          if (signedByMarker.has(storageRefToMarker(preferredRef))) return null
+-          return [storageRefToMarker(legacyThumbRef), legacyThumbRef] as const
+-        })
+-        .filter((entry): entry is SignedRefEntry => Boolean(entry)),
+-    ).values(),
+-  )
+-
+-  if (legacyThumbRefs.length > 0) {
+-    for (const item of await createSignedUrls(client, legacyThumbRefs)) {
+-      signedByMarker.set(storageRefToMarker(item.ref), item.signedUrl)
+-    }
+-  }
+-
+-  const fallbackRefs = Array.from(
+-    new Map(
+-      refs
+-        .map((ref) => {
+-          const preferredRef = getAssetVariantRef(ref, 'deck_thumb_v2')
+-          const legacyThumbRef = getAssetVariantRef(ref, 'deck_thumb')
+-          const originalRef = getOriginalAssetRef(ref)
+-          if (storageRefToMarker(preferredRef) === storageRefToMarker(originalRef)) return null
+-          if (signedByMarker.has(storageRefToMarker(preferredRef))) return null
+-          if (signedByMarker.has(storageRefToMarker(legacyThumbRef))) return null
+-          return [storageRefToMarker(originalRef), originalRef] as const
+-        })
+-        .filter((entry): entry is SignedRefEntry => Boolean(entry)),
+-    ).values(),
+-  )
+-
+-  if (fallbackRefs.length > 0) {
+-    for (const item of await createSignedUrls(client, fallbackRefs)) {
+-      signedByMarker.set(storageRefToMarker(item.ref), item.signedUrl)
+-    }
+-  }
+-
+-  return items.map((item) => ({
+-    ...item,
+-    questionPreview: signCardPreview(item.questionPreview, signedByMarker),
+-    answerPreview: signCardPreview(item.answerPreview, signedByMarker),
+-  }))
+-}
+-
+ async function getDeckRollups(client: SupabaseClient, userId: string) {
+   const rpcClient = client as SupabaseClient & {
+     rpc?: (
+
+
+# NOTE: This worker created untracked files that are not represented in git diff output.
+# See untracked-files.txt and the worker worktree path in run.json.

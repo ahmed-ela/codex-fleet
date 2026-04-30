@@ -1,0 +1,15 @@
+
+• Summary:
+
+  - Removed the compact settings helper copy Again cards reappear after 10m. by rendering no summary when the compact Again
+    interval is valid.
+  - Added a regression assertion that this sentence is absent in compact mode.
+
+  Files changed:
+
+  - frontend-react/src/features/study/components/StudySchedulerSettingsPanel.tsx
+Token usage: total=35,269 input=31,885 (+ 194,048 cached) output=3,384 (reasoning 1,215)
+To continue this session, run codex resume 019ddb64-c4bf-7bd1-bec6-1f723e69b566
+
+
+

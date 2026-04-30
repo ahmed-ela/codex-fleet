@@ -1,0 +1,83 @@
+diff --git a/frontend-react/src/features/decks/components/DeckBrowserTable.test.tsx b/frontend-react/src/features/decks/components/DeckBrowserTable.test.tsx
+index b113de9..5b19912 100644
+--- a/frontend-react/src/features/decks/components/DeckBrowserTable.test.tsx
++++ b/frontend-react/src/features/decks/components/DeckBrowserTable.test.tsx
+@@ -94,7 +94,7 @@ describe("DeckBrowserTable", () => {
+     expect(screen.queryByText("Due")).not.toBeInTheDocument();
+   });
+ 
+-  it("shows progress with the active remaining number", () => {
++  it("shows progress with the active remaining number in the default text color", () => {
+     render(
+       <DeckBrowserTable
+         rows={[baseRow]}
+@@ -112,7 +112,7 @@ describe("DeckBrowserTable", () => {
+     const progressPill = within(row).getByText(textContentEquals("Progress1/2"));
+ 
+     expect(progressPill).toBeInTheDocument();
+-    expect(within(progressPill).getByText("1/2")).toHaveClass("text-rose-600");
++    expect(within(progressPill).getByText("1/2")).toHaveClass("text-foreground");
+   });
+ 
+   it("shows an empty state when no decks match", () => {
+diff --git a/frontend-react/src/features/decks/components/DeckBrowserTable.tsx b/frontend-react/src/features/decks/components/DeckBrowserTable.tsx
+index e2321ff..e90903e 100644
+--- a/frontend-react/src/features/decks/components/DeckBrowserTable.tsx
++++ b/frontend-react/src/features/decks/components/DeckBrowserTable.tsx
+@@ -33,7 +33,7 @@ function ProgressCell({ row }: { row: DeckBrowserRow }) {
+     <div
+       className={cn(
+         "w-full pr-1 text-right text-sm font-semibold tabular-nums",
+-        progress.remainingCount > 0 ? "text-rose-600" : "text-muted-foreground/60",
++        progress.remainingCount > 0 ? "text-foreground" : "text-muted-foreground/60",
+       )}
+     >
+       {progress.label}
+@@ -296,7 +296,7 @@ export function DeckBrowserTable({
+                     label="Progress"
+                     value={progress.label}
+                     active={progress.remainingCount > 0}
+-                    activeClassName="text-rose-600"
++                    activeClassName="text-foreground"
+                   />
+                   {showStudyTimeColumns ? (
+                     <>
+diff --git a/frontend-react/src/features/study/components/StudyControls.test.tsx b/frontend-react/src/features/study/components/StudyControls.test.tsx
+index c2a6637..8b147b4 100644
+--- a/frontend-react/src/features/study/components/StudyControls.test.tsx
++++ b/frontend-react/src/features/study/components/StudyControls.test.tsx
+@@ -29,7 +29,7 @@ describe('StudyControls', () => {
+     expect(screen.getByText('Show Answer')).toBeInTheDocument()
+     const progressItem = screen.getByText(textContentEquals('Progress 5/6'))
+     expect(progressItem).toBeInTheDocument()
+-    expect(within(progressItem).getByText('5/6')).toHaveClass('text-rose-600')
++    expect(within(progressItem).getByText('5/6')).toHaveClass('text-foreground')
+     expect(screen.queryByText((_content, node) => node?.textContent === 'New 3')).not.toBeInTheDocument()
+     expect(screen.queryByText((_content, node) => node?.textContent === 'Learn 2')).not.toBeInTheDocument()
+     expect(screen.queryByText((_content, node) => node?.textContent === 'Done 1')).not.toBeInTheDocument()
+diff --git a/frontend-react/src/shared/ui/review-state-summary.test.tsx b/frontend-react/src/shared/ui/review-state-summary.test.tsx
+index f498ebb..04025da 100644
+--- a/frontend-react/src/shared/ui/review-state-summary.test.tsx
++++ b/frontend-react/src/shared/ui/review-state-summary.test.tsx
+@@ -14,7 +14,7 @@ describe("ReviewStateSummary", () => {
+     );
+ 
+     expect(screen.getByText((_content, node) => node?.textContent === "Progress 4/6")).toBeInTheDocument();
+-    expect(screen.getByText("4/6")).toHaveClass("text-rose-600");
++    expect(screen.getByText("4/6")).toHaveClass("text-foreground");
+     const doneItem = screen.getByText((_content, node) => node?.textContent === "Done 2");
+     expect(doneItem).toBeInTheDocument();
+     expect(screen.getByText("2")).toHaveClass("text-emerald-600");
+diff --git a/frontend-react/src/shared/ui/review-state-summary.tsx b/frontend-react/src/shared/ui/review-state-summary.tsx
+index baf8477..0be9184 100644
+--- a/frontend-react/src/shared/ui/review-state-summary.tsx
++++ b/frontend-react/src/shared/ui/review-state-summary.tsx
+@@ -18,7 +18,7 @@ const reviewStateToneClassNames: Record<ReviewStateTone, string> = {
+   learn: "text-rose-600",
+   due: "text-emerald-600",
+   done: "text-emerald-600",
+-  progress: "text-rose-600",
++  progress: "text-foreground",
+ };
+ 
+ function normalizeReviewProgressCount(value: number) {

@@ -1,0 +1,11 @@
+2026-04-29T07:51:09.556560Z ERROR codex_rollout::list: state db returned stale rollout path for thread 019dd7dc-8c32-72c1-843a-ff2d05fe3bac: /Users/ahmedelamin/.codex/sessions/2026/04/29/rollout-2026-04-29T02-10-48-019dd7dc-8c32-72c1-843a-ff2d05fe3bac.jsonl
+2026-04-29T07:51:09.599691Z ERROR codex_rollout::list: state db returned stale rollout path for thread 019dd828-4a4b-7150-99df-65d785f35ee8: /Users/ahmedelamin/.codex/sessions/2026/04/29/rollout-2026-04-29T03-33-32-019dd828-4a4b-7150-99df-65d785f35ee8.jsonl
+2026-04-29T07:54:25.922669Z ERROR codex_core::tools::router: error=apply_patch verification failed: Failed to find expected lines in /Users/ahmedelamin/.codex/memories/memory_summary.md:
+- macOS local app install/removal and stopwatch tuning: ttimer, realtime-stopwatch, build-and-install.sh, codesign --verify, spctl --assess, DispatchSourceTimer, hundredths, 50ms cadence
+  - desc: Covers full local install and cleanup of `ttimer`, then build-installing `realtime-stopwatch` and changing its live display cadence/precision. Search here first for user-scoped macOS app repos, LaunchAgent cleanup, or "real time" timer display tuning.
+  - learnings: For these local app repos, install means app bundle plus supporting launch/state paths, and uninstall means removing all of them. The accepted stopwatch behavior was a two-digit live display at a resource-friendly `50ms` cadence, not literal three-digit milliseconds.
+
+### Older Memory Topics
+
+No older high-signal topics currently outside the recent window.
+2026-04-29T08:04:16.782683Z ERROR codex_core::session: failed to record rollout items: thread 019dd838-6bbc-75f2-92be-39e9ea8be996 not found

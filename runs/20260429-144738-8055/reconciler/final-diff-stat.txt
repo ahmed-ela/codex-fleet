@@ -1,0 +1,16 @@
+ .../decks/components/DeckDesktopMenu.test.tsx      |  42 ++
+ .../features/decks/components/DeckDesktopMenu.tsx  |   8 +-
+ .../decks/components/DeckResponsiveChrome.test.tsx |  31 +-
+ .../decks/components/DeckResponsiveChrome.tsx      |  45 +-
+ .../decks/components/MainAppRoute.test.tsx         |  66 +-
+ .../src/features/decks/components/MainAppRoute.tsx |  14 -
+ .../study/components/StudyControls.test.tsx        |   6 +-
+ .../features/study/components/StudyControls.tsx    |  18 -
+ .../study/components/StudyDeckOverlay.test.tsx     |  23 +-
+ .../features/study/components/StudyDeckOverlay.tsx |  33 +-
+ frontend-react/src/lib/server/simplecardsStore.ts  | 688 ++-------------------
+ .../src/lib/server/simplecardsStoreDeckRollups.ts  | 169 +++++
+ .../src/lib/server/simplecardsStoreMappers.ts      | 201 ++++++
+ .../src/lib/server/simplecardsStorePreviews.ts     | 120 ++++
+ .../src/lib/server/simplecardsStoreRows.ts         | 151 +++++
+ 15 files changed, 918 insertions(+), 697 deletions(-)

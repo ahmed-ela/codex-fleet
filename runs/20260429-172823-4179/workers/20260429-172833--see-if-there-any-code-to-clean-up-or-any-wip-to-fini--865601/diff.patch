@@ -1,0 +1,666 @@
+diff --git a/docs/codex-remaining-work.md b/docs/codex-remaining-work.md
+index ca8e19f..b709c99 100644
+--- a/docs/codex-remaining-work.md
++++ b/docs/codex-remaining-work.md
+@@ -1,6 +1,6 @@
+ # Codex Remaining Work
+ 
+-Last updated: 2026-04-20
++Last updated: 2026-04-29
+ 
+ ## Active Priority
+ 
+@@ -18,11 +18,12 @@ Done in this slice:
+ - [x] Renamed editor/study component contracts to deck-first names: `CardDeckPicker`, `availableDecks`, `selectedDeckIds`, `primaryDeckId`, `onEnsureDeck`
+ - [x] Renamed route state and app-facing card request payloads to deck-first names: `routeDeckId`, `parseSelectedDeckIds`, `selectedDeckIds`, `deckIds`
+ - [x] Renamed stale study/editor utility files from `CardTagInput`/`tag.tsx` to deck/chip terminology and removed unused tag preview/composer helpers
++- [x] Renamed server-store row, mapper, rollup, and card/deck sync helpers to deck-first names while preserving legacy DB/API identifiers
++- [x] Kept active app code off `frontend-react/src/lib/tags.ts`; it remains a compatibility shim
+ 
+ Still left:
+ 
+-- [ ] Rename local store/server helpers that still use `tag*` names
+-- [ ] Keep active app code off `tags.ts`; it remains as a compatibility shim
++- [ ] Rename fallback-store/test internals that still use `tag*` names where they are not modeling legacy wire fields
+ - [ ] Decide whether live card model fields (`tagIds`, `tagNames`, `tagPaths`) get renamed to deck-first aliases or stay as compatibility fields
+ - [ ] Decide whether DB/storage names stay legacy for compatibility or get a real migration
+ 
+diff --git a/frontend-react/src/lib/server/simplecardsStore.ts b/frontend-react/src/lib/server/simplecardsStore.ts
+index 9d34505..3ea638b 100644
+--- a/frontend-react/src/lib/server/simplecardsStore.ts
++++ b/frontend-react/src/lib/server/simplecardsStore.ts
+@@ -33,7 +33,7 @@ import {
+ } from './simplecardsStoreDeckRollups'
+ import {
+   applyStudyTime,
+-  buildCardTagPayload,
++  buildCardDeckPayload,
+   buildStoredPreview,
+   isEmptyPreview,
+   normalizeDelayedStudyRepeats,
+@@ -44,7 +44,7 @@ import {
+   toSavedStudySession,
+   toStudyReviewLog,
+   toStudyTimeSummary,
+-  toTag,
++  toDeck,
+ } from './simplecardsStoreMappers'
+ import {
+   CARD_ACTIVITY_COLUMNS,
+@@ -74,38 +74,38 @@ import {
+   type CardPageFallbackRow,
+   type CardPageRow,
+   type CardRow,
+-  type CardTagLinkRow,
++  type CardDeckLinkRow,
+   type DeckRollupRpcRow,
+   type HiddenCardRow,
+   type RpcCardIdRow,
+   type StudyReviewLogRow,
+   type StudySessionRow,
+   type StudyTimeRow,
+-  type TagCountRpcRow,
+-  type TagRow,
++  type DeckCountRpcRow,
++  type DeckRow,
+ } from './simplecardsStoreRows'
+ 
+ export { signCardPageItems } from './simplecardsStorePreviews'
+ 
+-async function listTagRows(client: SupabaseClient, userId: string) {
++async function listDeckRows(client: SupabaseClient, userId: string) {
+   const { data, error } = await client.from(TAGS_TABLE).select(TAG_COLUMNS).eq('user_id', userId).order('created_at')
+   if (error) throw error
+-  return (data ?? []) as TagRow[]
++  return (data ?? []) as DeckRow[]
+ }
+ 
+-async function listTagRowsByIds(client: SupabaseClient, userId: string, tagIds: readonly string[]) {
+-  const ids = dedupeIds(tagIds)
+-  if (ids.length === 0) return [] as TagRow[]
++async function listDeckRowsByIds(client: SupabaseClient, userId: string, deckIds: readonly string[]) {
++  const ids = dedupeIds(deckIds)
++  if (ids.length === 0) return [] as DeckRow[]
+   const { data, error } = await client.from(TAGS_TABLE).select(TAG_COLUMNS).eq('user_id', userId).in('id', ids)
+   if (error) throw error
+-  const rows = (data ?? []) as TagRow[]
++  const rows = (data ?? []) as DeckRow[]
+   const byId = new Map(rows.map((row) => [row.id, row] as const))
+-  return ids.map((id) => byId.get(id)).filter((row): row is TagRow => Boolean(row))
++  return ids.map((id) => byId.get(id)).filter((row): row is DeckRow => Boolean(row))
+ }
+ 
+-async function listCardTagLinkRowsByTagIds(client: SupabaseClient, userId: string, tagIds: readonly string[]) {
+-  const ids = dedupeIds(tagIds)
+-  if (ids.length === 0) return [] as CardTagLinkRow[]
++async function listCardDeckLinkRowsByDeckIds(client: SupabaseClient, userId: string, deckIds: readonly string[]) {
++  const ids = dedupeIds(deckIds)
++  if (ids.length === 0) return [] as CardDeckLinkRow[]
+ 
+   const { data, error } = await client
+     .from(CARD_TAG_LINKS_TABLE)
+@@ -114,7 +114,7 @@ async function listCardTagLinkRowsByTagIds(client: SupabaseClient, userId: strin
+     .in('tag_id', ids)
+     .order('created_at')
+   if (error) throw error
+-  return (data ?? []) as CardTagLinkRow[]
++  return (data ?? []) as CardDeckLinkRow[]
+ }
+ 
+ async function listAllCardRows(client: SupabaseClient, userId: string) {
+@@ -293,7 +293,7 @@ async function listCardCountRows(client: SupabaseClient, userId: string) {
+   return (data ?? []) as Array<Pick<CardRow, 'id' | 'tag_ids'>>
+ }
+ 
+-async function listCardTagLinkRows(client: SupabaseClient, userId: string, cardIds?: readonly string[]) {
++async function listCardDeckLinkRows(client: SupabaseClient, userId: string, cardIds?: readonly string[]) {
+   let query = client
+     .from(CARD_TAG_LINKS_TABLE)
+     .select('user_id,card_id,tag_id,created_at')
+@@ -307,25 +307,25 @@ async function listCardTagLinkRows(client: SupabaseClient, userId: string, cardI
+ 
+   const { data, error } = await query
+   if (error) throw error
+-  return (data ?? []) as CardTagLinkRow[]
++  return (data ?? []) as CardDeckLinkRow[]
+ }
+ 
+-async function refreshCardsTagMetadata(client: SupabaseClient, userId: string, cardIds: readonly string[]) {
++async function refreshCardsDeckMetadata(client: SupabaseClient, userId: string, cardIds: readonly string[]) {
+   const ids = dedupeIds(cardIds)
+   if (ids.length === 0) return
+ 
+   const [cardRows, links] = await Promise.all([
+     listCardRowsByIds(client, userId, ids),
+-    listCardTagLinkRows(client, userId, ids),
++    listCardDeckLinkRows(client, userId, ids),
+   ])
+ 
+-  const tagRows = await listTagRowsByIds(
++  const deckRows = await listDeckRowsByIds(
+     client,
+     userId,
+     links.map((link) => link.tag_id),
+   )
+-  const tagById = new Map(tagRows.map((row) => [row.id, row] as const))
+-  const linksByCardId = new Map<string, CardTagLinkRow[]>()
++  const deckById = new Map(deckRows.map((row) => [row.id, row] as const))
++  const linksByCardId = new Map<string, CardDeckLinkRow[]>()
+ 
+   for (const link of links) {
+     const bucket = linksByCardId.get(link.card_id) ?? []
+@@ -334,20 +334,20 @@ async function refreshCardsTagMetadata(client: SupabaseClient, userId: string, c
+   }
+ 
+   for (const row of cardRows) {
+-    const orderedTagRows = (linksByCardId.get(row.id) ?? [])
+-      .map((link) => tagById.get(link.tag_id) ?? null)
+-      .filter((tag): tag is TagRow => Boolean(tag))
++    const orderedDeckRows = (linksByCardId.get(row.id) ?? [])
++      .map((link) => deckById.get(link.tag_id) ?? null)
++      .filter((deck): deck is DeckRow => Boolean(deck))
+ 
+     const { error } = await client
+       .from(CARDS_TABLE)
+-      .update(buildCardTagPayload(orderedTagRows))
++      .update(buildCardDeckPayload(orderedDeckRows))
+       .eq('user_id', userId)
+       .eq('id', row.id)
+     if (error) throw error
+   }
+ }
+ 
+-async function rebuildCardsTagMetadata(client: SupabaseClient, userId: string, cardIds: readonly string[]) {
++async function rebuildCardsDeckMetadata(client: SupabaseClient, userId: string, cardIds: readonly string[]) {
+   const ids = dedupeIds(cardIds)
+   if (ids.length === 0) return
+ 
+@@ -365,41 +365,41 @@ async function rebuildCardsTagMetadata(client: SupabaseClient, userId: string, c
+     if (!error) return
+   }
+ 
+-  await refreshCardsTagMetadata(client, userId, ids)
++  await refreshCardsDeckMetadata(client, userId, ids)
+ }
+ 
+-async function syncCardTagLinks(client: SupabaseClient, userId: string, cardId: string, tagRows: readonly TagRow[]) {
+-  const tagIds = dedupeIds(tagRows.map((row) => row.id))
++async function syncCardDeckLinks(client: SupabaseClient, userId: string, cardId: string, deckRows: readonly DeckRow[]) {
++  const deckIds = dedupeIds(deckRows.map((row) => row.id))
+   const { error: deleteError } = await client.from(CARD_TAG_LINKS_TABLE).delete().eq('user_id', userId).eq('card_id', cardId)
+   if (deleteError) throw deleteError
+ 
+-  if (tagIds.length > 0) {
+-    const rows = tagIds.map((tagId) => ({
++  if (deckIds.length > 0) {
++    const rows = deckIds.map((deckId) => ({
+       user_id: userId,
+       card_id: cardId,
+-      tag_id: tagId,
++      tag_id: deckId,
+     }))
+     const { error: insertError } = await client.from(CARD_TAG_LINKS_TABLE).insert(rows)
+     if (insertError) throw insertError
+   }
+ }
+ 
+-async function applyTagsToCardsFallback(client: SupabaseClient, userId: string, cardIds: readonly string[], tagRows: readonly TagRow[]) {
++async function applyDecksToCardsFallback(client: SupabaseClient, userId: string, cardIds: readonly string[], deckRows: readonly DeckRow[]) {
+   const ids = dedupeIds(cardIds)
+   if (ids.length === 0) return
+ 
+   for (const id of ids) {
+     const { error } = await client
+       .from(CARDS_TABLE)
+-      .update(buildCardTagPayload(tagRows))
++      .update(buildCardDeckPayload(deckRows))
+       .eq('user_id', userId)
+       .eq('id', id)
+     if (error) throw error
+-    await syncCardTagLinks(client, userId, id, tagRows)
++    await syncCardDeckLinks(client, userId, id, deckRows)
+   }
+ }
+ 
+-async function applyCardTags(client: SupabaseClient, userId: string, cardIds: readonly string[], tagRows: readonly TagRow[]) {
++async function applyCardDecks(client: SupabaseClient, userId: string, cardIds: readonly string[], deckRows: readonly DeckRow[]) {
+   const ids = dedupeIds(cardIds)
+   if (ids.length === 0) return
+ 
+@@ -413,12 +413,12 @@ async function applyCardTags(client: SupabaseClient, userId: string, cardIds: re
+   if (typeof rpcClient.rpc === 'function') {
+     const { error } = await rpcClient.rpc('simplecards_apply_card_tags', {
+       card_ids: ids,
+-      ordered_tag_ids: dedupeIds(tagRows.map((row) => row.id)),
++      ordered_tag_ids: dedupeIds(deckRows.map((row) => row.id)),
+     })
+     if (!error) return
+   }
+ 
+-  await applyTagsToCardsFallback(client, userId, ids, tagRows)
++  await applyDecksToCardsFallback(client, userId, ids, deckRows)
+ }
+ 
+ function normalizeCardRowsForChains(rows: readonly CardRow[]) {
+@@ -555,7 +555,7 @@ async function getDeckRollups(client: SupabaseClient, userId: string) {
+ }
+ 
+ export async function getTags(client: SupabaseClient, userId: string) {
+-  return (await listTagRows(client, userId)).map((row) => toTag(row))
++  return (await listDeckRows(client, userId)).map((row) => toDeck(row))
+ }
+ 
+ export async function getFolders(client: SupabaseClient, userId: string) {
+@@ -574,7 +574,7 @@ export async function getCardTagCounts(client: SupabaseClient, userId: string) {
+     const { data, error } = await rpcClient.rpc('simplecards_get_tag_counts')
+     if (!error && Array.isArray(data) && data.length > 0) {
+       return Object.fromEntries(
+-        (data as TagCountRpcRow[]).map((row) => [
++        (data as DeckCountRpcRow[]).map((row) => [
+           row.tag_id,
+           Math.max(0, Math.floor(Number(row.total_cards ?? 0))),
+         ]),
+@@ -585,13 +585,13 @@ export async function getCardTagCounts(client: SupabaseClient, userId: string) {
+     }
+   }
+ 
+-  const rows = await listCardTagLinkRows(client, userId)
++  const rows = await listCardDeckLinkRows(client, userId)
+   if (rows.length === 0) {
+     const fallbackRows = await listCardCountRows(client, userId)
+     const counts: Record<string, number> = {}
+     for (const row of fallbackRows) {
+-      for (const tagId of row.tag_ids ?? []) {
+-        counts[tagId] = (counts[tagId] ?? 0) + 1
++      for (const deckId of row.tag_ids ?? []) {
++        counts[deckId] = (counts[deckId] ?? 0) + 1
+       }
+     }
+     return counts
+@@ -634,7 +634,7 @@ export async function getLibraryBootstrap(
+   client: SupabaseClient,
+   userId: string,
+ ): Promise<LibraryBootstrap> {
+-  const [tags, hiddenCardIds, deckRollups] = await Promise.all([
++  const [decks, hiddenCardIds, deckRollups] = await Promise.all([
+     getTags(client, userId),
+     getHiddenCardIds(client, userId),
+     getDeckRollups(client, userId),
+@@ -644,16 +644,16 @@ export async function getLibraryBootstrap(
+       ? await getCardActivityByIds(client, userId, hiddenCardIds)
+       : [] as CardActivity[]
+   const deckPathCounts = subtractDeckPathCounts(
+-    buildDeckPathCountsFromRollups(tags, deckRollups),
+-    buildDeckPathCountsFromActivity(tags, hiddenCardActivity),
++    buildDeckPathCountsFromRollups(decks, deckRollups),
++    buildDeckPathCountsFromActivity(decks, hiddenCardActivity),
+   )
+   const deckPathTimes = subtractDeckPathTimes(
+-    buildDeckPathTimesFromRollups(tags, deckRollups),
+-    buildDeckPathTimesFromActivity(tags, hiddenCardActivity),
++    buildDeckPathTimesFromRollups(decks, deckRollups),
++    buildDeckPathTimesFromActivity(decks, hiddenCardActivity),
+   )
+ 
+   return {
+-    decks: tags,
++    decks,
+     hiddenCardIds,
+     deckRollups,
+     deckPathCounts,
+@@ -885,9 +885,9 @@ export async function createTag(client: SupabaseClient, userId: string, name: st
+   const cleaned = normalizeDeckName(name)
+   if (!cleaned) throw new Error('Deck name is required')
+ 
+-  const existingRows = await listTagRows(client, userId)
+-  const existing = existingRows.find((tag) => tag.normalized_name === normalizeDeckNameKey(cleaned))
+-  if (existing) return toTag(existing)
++  const existingRows = await listDeckRows(client, userId)
++  const existing = existingRows.find((deck) => deck.normalized_name === normalizeDeckNameKey(cleaned))
++  if (existing) return toDeck(existing)
+ 
+   const { data, error } = await client
+     .from(TAGS_TABLE)
+@@ -895,7 +895,7 @@ export async function createTag(client: SupabaseClient, userId: string, name: st
+     .select(TAG_COLUMNS)
+     .single()
+   if (error) throw error
+-  return toTag(data as TagRow)
++  return toDeck(data as DeckRow)
+ }
+ 
+ export async function createFolder(client: SupabaseClient, userId: string, name: string, parentId?: string | null) {
+@@ -907,16 +907,16 @@ export async function renameTag(client: SupabaseClient, userId: string, id: stri
+   const cleaned = normalizeDeckName(name)
+   if (!cleaned) throw new Error('Deck name is required')
+ 
+-  const existingRows = await listTagRows(client, userId)
+-  const target = existingRows.find((tag) => tag.id === id)
++  const existingRows = await listDeckRows(client, userId)
++  const target = existingRows.find((deck) => deck.id === id)
+   if (!target) throw new Error('Deck not found')
+ 
+   const duplicate = existingRows.find(
+-    (tag) => tag.id !== id && tag.normalized_name === normalizeDeckNameKey(cleaned),
++    (deck) => deck.id !== id && deck.normalized_name === normalizeDeckNameKey(cleaned),
+   )
+-  if (duplicate) return toTag(duplicate)
++  if (duplicate) return toDeck(duplicate)
+ 
+-  const impactedCardIds = (await listCardTagLinkRowsByTagIds(client, userId, [id])).map((link) => link.card_id)
++  const impactedCardIds = (await listCardDeckLinkRowsByDeckIds(client, userId, [id])).map((link) => link.card_id)
+ 
+   const { data, error } = await client
+     .from(TAGS_TABLE)
+@@ -927,8 +927,8 @@ export async function renameTag(client: SupabaseClient, userId: string, id: stri
+     .single()
+   if (error) throw error
+ 
+-  await rebuildCardsTagMetadata(client, userId, impactedCardIds)
+-  return toTag(data as TagRow)
++  await rebuildCardsDeckMetadata(client, userId, impactedCardIds)
++  return toDeck(data as DeckRow)
+ }
+ 
+ export async function renameFolder(client: SupabaseClient, userId: string, id: string, name: string) {
+@@ -952,13 +952,13 @@ export async function deleteFolder(client: SupabaseClient, userId: string, id: s
+ }
+ 
+ export async function deleteTags(client: SupabaseClient, userId: string, ids: string[]) {
+-  const tagIds = dedupeIds(ids)
+-  if (tagIds.length === 0) return
++  const deckIds = dedupeIds(ids)
++  if (deckIds.length === 0) return
+ 
+-  const impactedCardIds = (await listCardTagLinkRowsByTagIds(client, userId, tagIds)).map((link) => link.card_id)
+-  const { error } = await client.from(TAGS_TABLE).delete().eq('user_id', userId).in('id', tagIds)
++  const impactedCardIds = (await listCardDeckLinkRowsByDeckIds(client, userId, deckIds)).map((link) => link.card_id)
++  const { error } = await client.from(TAGS_TABLE).delete().eq('user_id', userId).in('id', deckIds)
+   if (error) throw error
+-  await rebuildCardsTagMetadata(client, userId, impactedCardIds)
++  await rebuildCardsDeckMetadata(client, userId, impactedCardIds)
+ }
+ 
+ export async function deleteFolders(client: SupabaseClient, userId: string, ids: string[]) {
+@@ -1132,13 +1132,13 @@ export async function createCard(
+ ) {
+   const resolvedParentCardId = await resolveParentCardId(client, userId, null, parentCardId)
+   const parentRow = resolvedParentCardId ? await listCardRowById(client, userId, resolvedParentCardId) : null
+-  const parentTagIds =
++  const parentDeckIds =
+     resolvedParentCardId === undefined || resolvedParentCardId === null
+       ? undefined
+       : (parentRow?.tag_ids ?? [])
+-  const effectiveDeckIds = parentTagIds ?? (Array.isArray(deckIds) ? deckIds : typeof deckIds === 'string' && deckIds.trim() ? [deckIds] : [])
+-  const tagRows = await listTagRowsByIds(client, userId, effectiveDeckIds)
+-  const payload = buildCardTagPayload(tagRows)
++  const effectiveDeckIds = parentDeckIds ?? (Array.isArray(deckIds) ? deckIds : typeof deckIds === 'string' && deckIds.trim() ? [deckIds] : [])
++  const deckRows = await listDeckRowsByIds(client, userId, effectiveDeckIds)
++  const payload = buildCardDeckPayload(deckRows)
+ 
+   const { data, error } = await client
+     .from(CARDS_TABLE)
+@@ -1155,7 +1155,7 @@ export async function createCard(
+     .single()
+   if (error) throw error
+ 
+-  await applyCardTags(client, userId, [(data as CardRow).id], tagRows)
++  await applyCardDecks(client, userId, [(data as CardRow).id], deckRows)
+   return toCard(data as CardRow)
+ }
+ 
+@@ -1173,24 +1173,24 @@ export async function updateCard(
+ 
+   const resolvedParentCardId = await resolveParentCardId(client, userId, id, parentCardId)
+   const parentRow = resolvedParentCardId ? await listCardRowById(client, userId, resolvedParentCardId) : null
+-  const parentTagIds =
++  const parentDeckIds =
+     resolvedParentCardId === undefined || resolvedParentCardId === null
+       ? undefined
+       : (parentRow?.tag_ids ?? [])
+   const effectiveDeckIds =
+-    parentTagIds === undefined
++    parentDeckIds === undefined
+       ? deckIds === undefined
+         ? (existing.tag_ids ?? [])
+         : (Array.isArray(deckIds) ? deckIds : typeof deckIds === 'string' && deckIds.trim() ? [deckIds] : [])
+-      : parentTagIds
+-  const tagRows = await listTagRowsByIds(client, userId, effectiveDeckIds)
++      : parentDeckIds
++  const deckRows = await listDeckRowsByIds(client, userId, effectiveDeckIds)
+ 
+   let updatePayload: Record<string, unknown> = {
+     question,
+     answer,
+     question_preview: buildStoredPreview(question),
+     answer_preview: buildStoredPreview(answer),
+-    ...buildCardTagPayload(tagRows),
++    ...buildCardDeckPayload(deckRows),
+   }
+   if (resolvedParentCardId !== undefined) {
+     updatePayload = {
+@@ -1202,32 +1202,32 @@ export async function updateCard(
+   const { data, error } = await client.from(CARDS_TABLE).update(updatePayload).eq('id', id).eq('user_id', userId).select(CARD_COLUMNS).single()
+   if (error) throw error
+ 
+-  await applyCardTags(client, userId, [id], tagRows)
++  await applyCardDecks(client, userId, [id], deckRows)
+ 
+-  const previousTagKey = dedupeDeckIds(existing.tag_ids ?? []).join('\u0000')
+-  const nextTagKey = dedupeDeckIds(tagRows.map((tag) => tag.id)).join('\u0000')
+-  if (previousTagKey !== nextTagKey) {
++  const previousDeckKey = dedupeDeckIds(existing.tag_ids ?? []).join('\u0000')
++  const nextDeckKey = dedupeDeckIds(deckRows.map((deck) => deck.id)).join('\u0000')
++  if (previousDeckKey !== nextDeckKey) {
+     const descendantIds = (await expandChainCardIds(client, userId, [id])).filter((cardId) => cardId !== id)
+     if (descendantIds.length > 0) {
+-      await applyCardTags(client, userId, descendantIds, tagRows)
++      await applyCardDecks(client, userId, descendantIds, deckRows)
+     }
+   }
+ 
+   return toCard(data as CardRow)
+ }
+ 
+-export async function moveCards(client: SupabaseClient, userId: string, ids: string[], tagId: string) {
+-  const targetTagId = tagId.trim()
+-  if (!targetTagId) throw new Error('Target deck not found')
++export async function moveCards(client: SupabaseClient, userId: string, ids: string[], deckId: string) {
++  const targetDeckId = deckId.trim()
++  if (!targetDeckId) throw new Error('Target deck not found')
+ 
+-  const tagRows = await listTagRowsByIds(client, userId, [targetTagId])
+-  if (tagRows.length === 0) throw new Error('Target deck not found')
++  const deckRows = await listDeckRowsByIds(client, userId, [targetDeckId])
++  if (deckRows.length === 0) throw new Error('Target deck not found')
+ 
+   const expandedIds = await expandChainCardIds(client, userId, ids)
+   const rows = await listCardRowsByIds(client, userId, expandedIds)
+   if (rows.length === 0) throw new Error('Card not found')
+ 
+-  await applyCardTags(client, userId, expandedIds, tagRows)
++  await applyCardDecks(client, userId, expandedIds, deckRows)
+   const updatedRows = await listCardRowsByIds(client, userId, expandedIds)
+   return updatedRows.map((row) => toCard(row))
+ }
+diff --git a/frontend-react/src/lib/server/simplecardsStoreDeckRollups.ts b/frontend-react/src/lib/server/simplecardsStoreDeckRollups.ts
+index 1884869..379c873 100644
+--- a/frontend-react/src/lib/server/simplecardsStoreDeckRollups.ts
++++ b/frontend-react/src/lib/server/simplecardsStoreDeckRollups.ts
+@@ -32,11 +32,11 @@ export function buildDeckRollups(cards: readonly CardActivity[]) {
+   return rollups
+ }
+ 
+-function buildNodeIdsByTagId(tags: readonly Deck[]) {
+-  const nodeIdsByTagId = new Map<string, string[]>()
++function buildNodeIdsByDeckId(decks: readonly Deck[]) {
++  const nodeIdsByDeckId = new Map<string, string[]>()
+ 
+-  for (const tag of tags) {
+-    const segments = normalizeDeckName(tag.name)
++  for (const deck of decks) {
++    const segments = normalizeDeckName(deck.name)
+       .split('/')
+       .map((segment) => normalizeDeckName(segment))
+       .filter(Boolean)
+@@ -48,20 +48,20 @@ function buildNodeIdsByTagId(tags: readonly Deck[]) {
+       keySegments.push(segment.toLowerCase())
+       nodeIds.push(keySegments.join('/'))
+     }
+-    nodeIdsByTagId.set(tag.id, nodeIds)
++    nodeIdsByDeckId.set(deck.id, nodeIds)
+   }
+ 
+-  return nodeIdsByTagId
++  return nodeIdsByDeckId
+ }
+ 
+-export function buildDeckPathCountsFromActivity(tags: readonly Deck[], cards: readonly CardActivity[]) {
+-  const nodeIdsByTagId = buildNodeIdsByTagId(tags)
++export function buildDeckPathCountsFromActivity(decks: readonly Deck[], cards: readonly CardActivity[]) {
++  const nodeIdsByDeckId = buildNodeIdsByDeckId(decks)
+ 
+   const counts: Record<string, number> = {}
+   for (const card of cards) {
+     const touchedNodeIds = new Set<string>()
+     for (const deckId of dedupeDeckIds(card.tagIds)) {
+-      for (const nodeId of nodeIdsByTagId.get(deckId) ?? []) {
++      for (const nodeId of nodeIdsByDeckId.get(deckId) ?? []) {
+         if (touchedNodeIds.has(nodeId)) continue
+         touchedNodeIds.add(nodeId)
+         counts[nodeId] = (counts[nodeId] ?? 0) + 1
+@@ -72,15 +72,15 @@ export function buildDeckPathCountsFromActivity(tags: readonly Deck[], cards: re
+   return counts
+ }
+ 
+-export function buildDeckPathTimesFromActivity(tags: readonly Deck[], cards: readonly CardActivity[]) {
+-  const nodeIdsByTagId = buildNodeIdsByTagId(tags)
++export function buildDeckPathTimesFromActivity(decks: readonly Deck[], cards: readonly CardActivity[]) {
++  const nodeIdsByDeckId = buildNodeIdsByDeckId(decks)
+ 
+   const times: NonNullable<LibraryBootstrap['deckPathTimes']> = {}
+   for (const card of cards) {
+     if (getStudyTimeTotalMs(card) <= 0) continue
+     const touchedNodeIds = new Set<string>()
+     for (const deckId of dedupeDeckIds(card.tagIds)) {
+-      for (const nodeId of nodeIdsByTagId.get(deckId) ?? []) {
++      for (const nodeId of nodeIdsByDeckId.get(deckId) ?? []) {
+         if (touchedNodeIds.has(nodeId)) continue
+         touchedNodeIds.add(nodeId)
+         times[nodeId] = addStudyTimeTotals(times[nodeId], card)
+@@ -92,16 +92,16 @@ export function buildDeckPathTimesFromActivity(tags: readonly Deck[], cards: rea
+ }
+ 
+ export function buildDeckPathCountsFromRollups(
+-  tags: readonly Deck[],
++  decks: readonly Deck[],
+   deckRollups: Readonly<Record<string, DeckActivityRollup>>,
+ ) {
+-  const nodeIdsByTagId = buildNodeIdsByTagId(tags)
++  const nodeIdsByDeckId = buildNodeIdsByDeckId(decks)
+ 
+   const counts: Record<string, number> = {}
+   for (const [deckId, rollup] of Object.entries(deckRollups)) {
+     const totalCards = Math.max(0, Number(rollup.totalCards ?? 0))
+     if (totalCards <= 0) continue
+-    for (const nodeId of nodeIdsByTagId.get(deckId) ?? []) {
++    for (const nodeId of nodeIdsByDeckId.get(deckId) ?? []) {
+       counts[nodeId] = (counts[nodeId] ?? 0) + totalCards
+     }
+   }
+@@ -110,15 +110,15 @@ export function buildDeckPathCountsFromRollups(
+ }
+ 
+ export function buildDeckPathTimesFromRollups(
+-  tags: readonly Deck[],
++  decks: readonly Deck[],
+   deckRollups: Readonly<Record<string, DeckActivityRollup>>,
+ ) {
+-  const nodeIdsByTagId = buildNodeIdsByTagId(tags)
++  const nodeIdsByDeckId = buildNodeIdsByDeckId(decks)
+ 
+   const times: NonNullable<LibraryBootstrap['deckPathTimes']> = {}
+   for (const [deckId, rollup] of Object.entries(deckRollups)) {
+     if (getStudyTimeTotalMs(rollup) <= 0) continue
+-    for (const nodeId of nodeIdsByTagId.get(deckId) ?? []) {
++    for (const nodeId of nodeIdsByDeckId.get(deckId) ?? []) {
+       times[nodeId] = addStudyTimeTotals(times[nodeId], rollup)
+     }
+   }
+diff --git a/frontend-react/src/lib/server/simplecardsStoreMappers.ts b/frontend-react/src/lib/server/simplecardsStoreMappers.ts
+index c28221b..1237b40 100644
+--- a/frontend-react/src/lib/server/simplecardsStoreMappers.ts
++++ b/frontend-react/src/lib/server/simplecardsStoreMappers.ts
+@@ -8,9 +8,9 @@ import type {
+   CardActivity,
+   CardPageItem,
+   CardPreview,
++  Deck,
+   StudyReviewLog,
+   StudyTimeSummary,
+-  Tag,
+ } from '@/lib/types'
+ import type {
+   CardActivityRow,
+@@ -20,7 +20,7 @@ import type {
+   StudyReviewLogRow,
+   StudySessionRow,
+   StudyTimeRow,
+-  TagRow,
++  DeckRow,
+ } from './simplecardsStoreRows'
+ 
+ const EMPTY_PREVIEW: CardPreview = {
+@@ -50,7 +50,7 @@ export function isEmptyPreview(preview: CardPreview) {
+   return !preview.text && !preview.imageSrc && preview.imageCount === 0
+ }
+ 
+-export function toTag(row: TagRow): Tag {
++export function toDeck(row: DeckRow): Deck {
+   return {
+     id: row.id,
+     name: row.name,
+@@ -186,9 +186,9 @@ export function normalizeDelayedStudyRepeats(value: unknown) {
+     .filter((item): item is { cardId: string; dueAt: string } => Boolean(item))
+ }
+ 
+-export function buildCardTagPayload(tagRows: readonly TagRow[]) {
+-  const tagsById = new Map(tagRows.map((tag) => [tag.id, toTag(tag)] as const))
+-  const fields = deriveCardDeckFields(tagRows.map((tag) => tag.id), tagsById)
++export function buildCardDeckPayload(deckRows: readonly DeckRow[]) {
++  const decksById = new Map(deckRows.map((deck) => [deck.id, toDeck(deck)] as const))
++  const fields = deriveCardDeckFields(deckRows.map((deck) => deck.id), decksById)
+   return {
+     deck_id: null,
+     folder_path: fields.folderPath,
+diff --git a/frontend-react/src/lib/server/simplecardsStoreRows.ts b/frontend-react/src/lib/server/simplecardsStoreRows.ts
+index 918d133..a9c1eb2 100644
+--- a/frontend-react/src/lib/server/simplecardsStoreRows.ts
++++ b/frontend-react/src/lib/server/simplecardsStoreRows.ts
+@@ -18,7 +18,7 @@ export const STUDY_REVIEW_LOG_COLUMNS = 'id,card_id,mode,result,duration_ms,revi
+ export const STUDY_TIME_CARD_ID_FILTER_LIMIT = 500
+ export const STUDY_TIME_PAGE_SIZE = 1000
+ 
+-export type TagRow = {
++export type DeckRow = {
+   id: string
+   name: string
+   normalized_name: string
+@@ -59,7 +59,7 @@ export type CardPageRow = Pick<
+ 
+ export type CardPageFallbackRow = Pick<CardRow, 'id' | 'question' | 'answer'>
+ 
+-export type CardTagLinkRow = {
++export type CardDeckLinkRow = {
+   user_id: string
+   card_id: string
+   tag_id: string
+@@ -104,7 +104,7 @@ export type StudyReviewLogRow = {
+ }
+ 
+ export type RpcCardIdRow = { id: string }
+-export type TagCountRpcRow = { tag_id: string; total_cards: number | string | null }
++export type DeckCountRpcRow = { tag_id: string; total_cards: number | string | null }
+ export type DeckRollupRpcRow = {
+   tag_id: string
+   total_cards: number | string | null

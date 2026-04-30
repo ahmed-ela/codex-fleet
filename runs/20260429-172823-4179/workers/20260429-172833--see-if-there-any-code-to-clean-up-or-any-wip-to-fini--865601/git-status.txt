@@ -1,0 +1,5 @@
+ M docs/codex-remaining-work.md
+ M frontend-react/src/lib/server/simplecardsStore.ts
+ M frontend-react/src/lib/server/simplecardsStoreDeckRollups.ts
+ M frontend-react/src/lib/server/simplecardsStoreMappers.ts
+ M frontend-react/src/lib/server/simplecardsStoreRows.ts

@@ -1,0 +1,175 @@
+diff --git a/frontend-react/src/features/decks/components/DeckDesktopMenu.test.tsx b/frontend-react/src/features/decks/components/DeckDesktopMenu.test.tsx
+index 2bc6dc0..4cd4cbd 100644
+--- a/frontend-react/src/features/decks/components/DeckDesktopMenu.test.tsx
++++ b/frontend-react/src/features/decks/components/DeckDesktopMenu.test.tsx
+@@ -30,14 +30,14 @@ describe("DeckDesktopMenu", () => {
+         model={{
+           ...baseModel,
+           title: "Biology",
+-          titleMeta: <span>New 1 Learn 1 Due 1</span>,
++          titleMeta: <span>New 1 Learn 1</span>,
+         }}
+       />,
+     );
+ 
+     expect(screen.getByTestId("deck-title-stack")).toHaveClass("min-h-[2.5rem]");
+     expect(screen.getByTestId("deck-title-meta")).toHaveClass("mt-1", "min-h-4");
+-    expect(screen.getByTestId("deck-title-meta")).toHaveTextContent("New 1 Learn 1 Due 1");
++    expect(screen.getByTestId("deck-title-meta")).toHaveTextContent("New 1 Learn 1");
+   });
+ 
+   it("renders the navigation button with the Nocards logo and label", () => {
+diff --git a/frontend-react/src/features/decks/components/MainAppRoute.test.tsx b/frontend-react/src/features/decks/components/MainAppRoute.test.tsx
+index f509530..13834d3 100644
+--- a/frontend-react/src/features/decks/components/MainAppRoute.test.tsx
++++ b/frontend-react/src/features/decks/components/MainAppRoute.test.tsx
+@@ -329,6 +329,10 @@ function expectVisibleCountLabel(label: string) {
+   expect(screen.getAllByText((_content, node) => node?.textContent === label).length).toBeGreaterThan(0)
+ }
+ 
++function expectNoVisibleCountLabel(label: string) {
++  expect(screen.queryByText((_content, node) => node?.textContent === label)).not.toBeInTheDocument()
++}
++
+ describe('MainAppRoute', () => {
+   beforeEach(() => {
+     seedStore()
+@@ -675,7 +679,7 @@ describe('MainAppRoute', () => {
+     expect(screen.getByText('Biology')).toBeInTheDocument()
+     expect(screen.getByText((_content, node) => node?.textContent === 'New 1')).toBeInTheDocument()
+     expect(screen.getByText((_content, node) => node?.textContent === 'Learn 1')).toBeInTheDocument()
+-    expect(screen.getByText((_content, node) => node?.textContent === 'Due 1')).toBeInTheDocument()
++    expectNoVisibleCountLabel('Due 1')
+   })
+ 
+   it('shows only New and Learn counts at the top of the mobile selected deck view', async () => {
+@@ -715,9 +719,12 @@ describe('MainAppRoute', () => {
+     renderCardsRoute()
+     await waitForPreviewCards(3)
+ 
+-    expect(screen.getByText((_content, node) => node?.textContent === 'New 1')).toBeInTheDocument()
+-    expect(screen.getByText((_content, node) => node?.textContent === 'Learn 1')).toBeInTheDocument()
+-    expect(screen.queryByText((_content, node) => node?.textContent === 'Due 1')).not.toBeInTheDocument()
++    const mobileTitleStack = screen.getByTestId('deck-mobile-title-stack')
++    expect(mobileTitleStack).toHaveClass('min-h-14', 'pt-1', 'text-center')
++    expect(within(mobileTitleStack).getByText('Biology')).toBeInTheDocument()
++    expect(within(mobileTitleStack).getByText((_content, node) => node?.textContent === 'New 1')).toBeInTheDocument()
++    expect(within(mobileTitleStack).getByText((_content, node) => node?.textContent === 'Learn 1')).toBeInTheDocument()
++    expect(within(mobileTitleStack).queryByText((_content, node) => node?.textContent === 'Due 1')).not.toBeInTheDocument()
+   })
+ 
+   it('updates the in-deck title counts immediately after studying a new card', async () => {
+@@ -731,7 +738,7 @@ describe('MainAppRoute', () => {
+ 
+     expect(screen.getByText((_content, node) => node?.textContent === 'New 1')).toBeInTheDocument()
+     expect(screen.getByText((_content, node) => node?.textContent === 'Learn 0')).toBeInTheDocument()
+-    expect(screen.getByText((_content, node) => node?.textContent === 'Due 0')).toBeInTheDocument()
++    expectNoVisibleCountLabel('Due 0')
+ 
+     fireEvent.keyDown(window, { key: ' ', code: 'Space' })
+ 
+@@ -760,7 +767,7 @@ describe('MainAppRoute', () => {
+     await waitFor(() => expect(screen.queryByTestId('study-stage-surface')).not.toBeInTheDocument())
+     expectVisibleCountLabel('New 0')
+     expectVisibleCountLabel('Learn 0')
+-    expectVisibleCountLabel('Due 1')
++    expectNoVisibleCountLabel('Due 1')
+   })
+ 
+   it('restores review progress and review logs when Cmd+Z undoes a committed study answer', async () => {
+@@ -806,7 +813,7 @@ describe('MainAppRoute', () => {
+ 
+     await waitFor(() => expect(screen.queryByTestId('study-stage-surface')).not.toBeInTheDocument())
+     expectVisibleCountLabel('New 1')
+-    expectVisibleCountLabel('Due 0')
++    expectNoVisibleCountLabel('Due 0')
+   })
+ 
+   it('shows study answer intervals from the saved scheduler settings', async () => {
+@@ -880,7 +887,7 @@ describe('MainAppRoute', () => {
+     await waitForPreviewCards(2)
+ 
+     expect(screen.getByText((_content, node) => node?.textContent === 'Learn 1')).toBeInTheDocument()
+-    expect(screen.getByText((_content, node) => node?.textContent === 'Due 1')).toBeInTheDocument()
++    expectNoVisibleCountLabel('Due 1')
+ 
+     fireEvent.click(screen.getByRole('button', { name: 'Reset' }))
+ 
+@@ -893,7 +900,7 @@ describe('MainAppRoute', () => {
+     )
+ 
+     expect(screen.getByText((_content, node) => node?.textContent === 'Learn 0')).toBeInTheDocument()
+-    expect(screen.getByText((_content, node) => node?.textContent === 'Due 0')).toBeInTheDocument()
++    expectNoVisibleCountLabel('Due 0')
+     expect(screen.getByRole('button', { name: 'Reset' })).toBeDisabled()
+   }, 10000)
+ 
+@@ -913,7 +920,7 @@ describe('MainAppRoute', () => {
+     renderCardsRoute()
+     await waitForPreviewCards(1)
+ 
+-    expect(screen.getByText((_content, node) => node?.textContent === 'Due 1')).toBeInTheDocument()
++    expectNoVisibleCountLabel('Due 1')
+     expect(screen.queryByRole('button', { name: 'Study' })).not.toBeInTheDocument()
+     expect(screen.getByRole('button', { name: 'Cram' })).toBeEnabled()
+ 
+@@ -936,7 +943,7 @@ describe('MainAppRoute', () => {
+     fireEvent.click(getPrimaryDecksButton())
+ 
+     await waitFor(() => expect(screen.queryByTestId('study-stage-surface')).not.toBeInTheDocument())
+-    expect(screen.getByText((_content, node) => node?.textContent === 'Due 1')).toBeInTheDocument()
++    expectNoVisibleCountLabel('Due 1')
+   }, 10000)
+ 
+   it('auto-resumes the saved cram session from its separate cram session key', async () => {
+diff --git a/frontend-react/src/features/decks/components/MainAppRoute.tsx b/frontend-react/src/features/decks/components/MainAppRoute.tsx
+index 241508b..5b56370 100644
+--- a/frontend-react/src/features/decks/components/MainAppRoute.tsx
++++ b/frontend-react/src/features/decks/components/MainAppRoute.tsx
+@@ -1354,7 +1354,6 @@ export function MainAppRoute({
+             items={[
+               { label: "New", value: selectedDeckReviewCounts.newCount, tone: "new" },
+               { label: "Learn", value: selectedDeckReviewCounts.learnCount, tone: "learn" },
+-              { label: "Due", value: selectedDeckReviewCounts.dueCount, tone: "due" },
+             ]}
+             className="justify-center"
+             itemClassName="text-[11px] sm:text-xs"
+@@ -1381,7 +1380,6 @@ export function MainAppRoute({
+       ) : null,
+     [
+       hasDeckSelection,
+-      selectedDeckReviewCounts.dueCount,
+       selectedDeckReviewCounts.learnCount,
+       selectedDeckReviewCounts.newCount,
+       selectedDeckStudyEstimate,
+@@ -3112,14 +3110,22 @@ export function MainAppRoute({
+         ) : null}
+ 
+         {hasDeckSelection && !desktopViewport ? (
+-          <ReviewStateSummary
+-            items={[
+-              { label: "New", value: selectedDeckReviewCounts.newCount, tone: "new" },
+-              { label: "Learn", value: selectedDeckReviewCounts.learnCount, tone: "learn" },
+-            ]}
+-            className="mb-3 justify-center gap-x-2 gap-y-1 lg:hidden"
+-            itemClassName="rounded-full border border-border bg-background px-2 py-1 text-[11px] shadow-[0_1px_0_rgb(15_23_42_/_0.04)]"
+-          />
++          <header
++            data-testid="deck-mobile-title-stack"
++            className="mb-4 flex min-h-14 flex-col items-center justify-center px-2 pt-1 text-center lg:hidden"
++          >
++            <div className="max-w-full truncate text-sm font-semibold text-foreground">
++              {workspaceTitle}
++            </div>
++            <ReviewStateSummary
++              items={[
++                { label: "New", value: selectedDeckReviewCounts.newCount, tone: "new" },
++                { label: "Learn", value: selectedDeckReviewCounts.learnCount, tone: "learn" },
++              ]}
++              className="mt-1 justify-center gap-x-2 gap-y-1"
++              itemClassName="rounded-full border border-border bg-background px-2 py-1 text-[11px] shadow-[0_1px_0_rgb(15_23_42_/_0.04)]"
++            />
++          </header>
+         ) : null}
+ 
+         {hasDeckSelection && studyTimeSurfacesVisible ? (

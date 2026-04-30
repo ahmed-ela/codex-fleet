@@ -1,0 +1,12 @@
+ docs/codex-remaining-work.md                       |   7 +-
+ .../decks/components/MainAppRoute.test.tsx         |  45 ++
+ .../src/features/decks/components/MainAppRoute.tsx | 772 ++++++---------------
+ .../src/features/decks/lib/deckBrowser.test.ts     |  69 ++
+ .../src/features/study/lib/reviewScheduler.test.ts |  31 +
+ .../features/study/lib/studySessionStore.test.ts   |   1 +
+ .../src/features/study/lib/studySessionStore.ts    |   5 +
+ frontend-react/src/lib/server/simplecardsStore.ts  | 176 ++---
+ .../src/lib/server/simplecardsStoreDeckRollups.ts  |  36 +-
+ .../src/lib/server/simplecardsStoreMappers.ts      |  12 +-
+ .../src/lib/server/simplecardsStoreRows.ts         |   6 +-
+ 11 files changed, 495 insertions(+), 665 deletions(-)

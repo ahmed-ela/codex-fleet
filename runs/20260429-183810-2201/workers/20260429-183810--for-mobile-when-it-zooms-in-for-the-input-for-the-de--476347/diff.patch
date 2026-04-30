@@ -1,0 +1,24 @@
+diff --git a/frontend-react/src/app.css b/frontend-react/src/app.css
+index 32e21d8..7cda37f 100644
+--- a/frontend-react/src/app.css
++++ b/frontend-react/src/app.css
+@@ -167,6 +167,19 @@
+   }
+ }
+ 
++@media (hover: none) and (pointer: coarse) {
++  :where(
++    input:not([type="button"]):not([type="checkbox"]):not([type="color"]):not([type="file"]):not([type="image"]):not([type="radio"]):not([type="range"]):not([type="reset"]):not([type="submit"]),
++    textarea,
++    select,
++    [contenteditable="true"],
++    [contenteditable=""],
++    [contenteditable="plaintext-only"]
++  ) {
++    font-size: 16px;
++  }
++}
++
+ @layer utilities {
+   .arcade-app-shell {
+     position: relative;

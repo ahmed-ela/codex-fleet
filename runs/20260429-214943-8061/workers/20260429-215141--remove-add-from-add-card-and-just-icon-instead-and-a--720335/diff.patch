@@ -1,0 +1,87 @@
+diff --git a/frontend-react/src/features/decks/components/MainAppRoute.test.tsx b/frontend-react/src/features/decks/components/MainAppRoute.test.tsx
+index c493304..da306c3 100644
+--- a/frontend-react/src/features/decks/components/MainAppRoute.test.tsx
++++ b/frontend-react/src/features/decks/components/MainAppRoute.test.tsx
+@@ -501,7 +501,10 @@ describe('MainAppRoute', () => {
+     renderDecksRoute()
+ 
+     expect(await screen.findByText('Press "+" to create your first deck')).toBeInTheDocument()
+-    expect(screen.getByRole('button', { name: 'Add deck' })).toBeInTheDocument()
++    const addDeckButton = screen.getByRole('button', { name: 'Add deck' })
++    expect(addDeckButton).toBeInTheDocument()
++    expect(addDeckButton.querySelector('svg')).not.toBeNull()
++    expect(within(addDeckButton).queryByText('Add deck')).not.toBeInTheDocument()
+   })
+ 
+   it('renders persisted deck snapshots immediately while refreshing them in the background', async () => {
+@@ -565,11 +568,14 @@ describe('MainAppRoute', () => {
+     expect(screen.getByRole('button', { name: 'Chemistry' })).toBeInTheDocument()
+   })
+ 
+-  it('shows the add-deck action on the desktop deck browser home', async () => {
++  it('shows the plus-only add-deck action on the desktop deck browser home', async () => {
+     renderDecksRoute()
+ 
+     expect(await screen.findByRole('button', { name: 'Biology' })).toBeInTheDocument()
+-    expect(screen.getByRole('button', { name: 'Add deck' })).toBeInTheDocument()
++    const addDeckButton = screen.getByRole('button', { name: 'Add deck' })
++    expect(addDeckButton).toBeInTheDocument()
++    expect(addDeckButton.querySelector('svg')).not.toBeNull()
++    expect(within(addDeckButton).queryByText('Add deck')).not.toBeInTheDocument()
+   })
+ 
+   it('shows a top-left Decks title on the mobile deck browser home', async () => {
+@@ -1155,7 +1161,10 @@ describe('MainAppRoute', () => {
+     expect(screen.queryByRole('button', { name: 'Select' })).not.toBeInTheDocument()
+     expect(screen.queryByRole('button', { name: 'Study' })).not.toBeInTheDocument()
+     expect(screen.getByRole('button', { name: 'Cram' })).toBeInTheDocument()
+-    expect(screen.getByRole('button', { name: 'Add card' })).toBeInTheDocument()
++    const addCardButton = screen.getByRole('button', { name: 'Add card' })
++    expect(addCardButton).toBeInTheDocument()
++    expect(addCardButton.querySelector('svg')).not.toBeNull()
++    expect(within(addCardButton).queryByText('Add card')).not.toBeInTheDocument()
+     expect(screen.queryByRole('button', { name: 'Reset' })).not.toBeInTheDocument()
+   })
+ 
+@@ -1946,6 +1955,8 @@ describe('MainAppRoute', () => {
+     const addDeckButton = screen.getByRole('button', { name: 'Add deck' })
+     const settingsButton = screen.getByRole('button', { name: 'Open settings' })
+     expect(addDeckButton).toBeInTheDocument()
++    expect(addDeckButton.querySelector('svg')).not.toBeNull()
++    expect(within(addDeckButton).queryByText('Add deck')).not.toBeInTheDocument()
+     expect(settingsButton).toBeInTheDocument()
+     expect(decksButton.compareDocumentPosition(addDeckButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+     expect(addDeckButton.compareDocumentPosition(settingsButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+@@ -1965,7 +1976,10 @@ describe('MainAppRoute', () => {
+     await waitForPreviewCards()
+ 
+     expect(screen.queryByRole('button', { name: 'Add deck' })).not.toBeInTheDocument()
+-    expect(screen.getByRole('button', { name: 'Add card' })).toBeInTheDocument()
++    const addCardButton = screen.getByRole('button', { name: 'Add card' })
++    expect(addCardButton).toBeInTheDocument()
++    expect(addCardButton.querySelector('svg')).not.toBeNull()
++    expect(within(addCardButton).queryByText('Add card')).not.toBeInTheDocument()
+   })
+ 
+   it('adds a card optimistically so the editor can reset before the request finishes', async () => {
+diff --git a/frontend-react/src/features/decks/components/MainAppRoute.tsx b/frontend-react/src/features/decks/components/MainAppRoute.tsx
+index 9b06b53..97736f3 100644
+--- a/frontend-react/src/features/decks/components/MainAppRoute.tsx
++++ b/frontend-react/src/features/decks/components/MainAppRoute.tsx
+@@ -2642,6 +2642,7 @@ export function MainAppRoute({
+           active: createDeckOpen,
+           variant: "default",
+           icon: Plus,
++          iconOnly: true,
+         },
+         {
+           id: "settings",
+@@ -2694,6 +2695,8 @@ export function MainAppRoute({
+           onClick: handleDesktopAddCardClick,
+           active: editorOpen && !editorCard,
+           variant: "outline",
++          icon: Plus,
++          iconOnly: true,
+         },
+         {
+           id: "settings",

@@ -1,0 +1,83 @@
+diff --git a/frontend-react/src/features/decks/components/DeckDesktopMenu.tsx b/frontend-react/src/features/decks/components/DeckDesktopMenu.tsx
+index 9340978..5bba3cc 100644
+--- a/frontend-react/src/features/decks/components/DeckDesktopMenu.tsx
++++ b/frontend-react/src/features/decks/components/DeckDesktopMenu.tsx
+@@ -1,9 +1,10 @@
+ "use client";
+ 
++import type { SVGProps } from "react";
+ import type { DeckScreenAction, DeckScreenHeaderModel } from "@/features/decks/types";
+ import { Button } from "@/shared/ui/button";
+ 
+-function NocardsLogoMark({ className }: { className?: string }) {
++export function NocardsLogoMark({ className, ...props }: SVGProps<SVGSVGElement>) {
+   return (
+     <svg
+       xmlns="http://www.w3.org/2000/svg"
+@@ -11,6 +12,7 @@ function NocardsLogoMark({ className }: { className?: string }) {
+       fill="none"
+       className={className}
+       aria-hidden="true"
++      {...props}
+     >
+       <g transform="translate(2.625 5.95304)">
+         <rect
+diff --git a/frontend-react/src/features/decks/components/DeckResponsiveChrome.test.tsx b/frontend-react/src/features/decks/components/DeckResponsiveChrome.test.tsx
+index e1cec1e..fb040f6 100644
+--- a/frontend-react/src/features/decks/components/DeckResponsiveChrome.test.tsx
++++ b/frontend-react/src/features/decks/components/DeckResponsiveChrome.test.tsx
+@@ -30,6 +30,7 @@ describe("DeckMobileActionDock", () => {
+       expect(button.querySelector("svg")).not.toBeNull();
+       expect(within(button).getByText(label)).toHaveClass("text-center", "text-[0.625rem]");
+     }
++    expect(within(actionPill).getByRole("button", { name: "Decks" }).querySelectorAll("rect")).toHaveLength(3);
+ 
+     expect(within(actionPill).queryByRole("button", { name: "Select" })).not.toBeInTheDocument();
+     expect(within(actionPill).queryByRole("button", { name: "Add card" })).not.toBeInTheDocument();
+diff --git a/frontend-react/src/features/decks/components/DeckResponsiveChrome.tsx b/frontend-react/src/features/decks/components/DeckResponsiveChrome.tsx
+index e6bcbe0..99d765a 100644
+--- a/frontend-react/src/features/decks/components/DeckResponsiveChrome.tsx
++++ b/frontend-react/src/features/decks/components/DeckResponsiveChrome.tsx
+@@ -3,10 +3,13 @@
+ import {
+   type LucideIcon,
+ } from "lucide-react";
++import { NocardsLogoMark } from "@/features/decks/components/DeckDesktopMenu";
+ import type { DeckScreenDockModel } from "@/features/decks/types";
+ import { Button } from "@/shared/ui/button";
+ import { cn } from "@/lib/utils";
+ 
++type DeckActionIcon = LucideIcon | typeof NocardsLogoMark;
++
+ function formatCompactBadge(count: number) {
+   if (count <= 0) return null;
+   return count > 99 ? "99+" : String(count);
+@@ -27,7 +30,7 @@ function DeckActionButton({
+   prominent = false,
+   onClick,
+ }: {
+-  icon?: LucideIcon;
++  icon?: DeckActionIcon;
+   label: string;
+   active?: boolean;
+   disabled?: boolean;
+@@ -77,6 +80,10 @@ function DeckActionButton({
+   );
+ }
+ 
++function getMobileActionIcon(action: DeckScreenDockModel["actions"][number]) {
++  return action.id === "decks" ? NocardsLogoMark : action.icon;
++}
++
+ function DeckFloatingActionButton({
+   icon: Icon,
+   label,
+@@ -188,7 +195,7 @@ export function DeckMobileActionDock({
+           {toolbarActions.map((action) => (
+             <DeckActionButton
+               key={action.id}
+-              icon={action.icon}
++              icon={getMobileActionIcon(action)}
+               label={action.label}
+               active={action.active}
+               disabled={action.disabled}

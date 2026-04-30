@@ -1,0 +1,74 @@
+diff --git a/frontend-react/src/features/study/components/StudySchedulerSettingsPanel.test.tsx b/frontend-react/src/features/study/components/StudySchedulerSettingsPanel.test.tsx
+index ffafa0f..cd44449 100644
+--- a/frontend-react/src/features/study/components/StudySchedulerSettingsPanel.test.tsx
++++ b/frontend-react/src/features/study/components/StudySchedulerSettingsPanel.test.tsx
+@@ -34,7 +34,7 @@ describe("StudySchedulerSettingsPanel", () => {
+     );
+ 
+     expect(screen.getByText("FSRS schedule")).toBeInTheDocument();
+-    expect(screen.getByText(/10m again.*1d good.*90% target.*0 due now.*0\.0 reviews\/day.*1\.00x load/)).toBeInTheDocument();
++    expect(screen.getByText(/10m missed.*1d good.*90% target.*0 due now.*0\.0 reviews\/day.*1\.00x load/)).toBeInTheDocument();
+     expect(screen.getByText("Preview · 87% / 81% recall")).toBeInTheDocument();
+     expect(screen.getByText("8 recent reviews · +2% target bias · 92% effective target")).toBeInTheDocument();
+     expect(screen.queryByText("Sample")).not.toBeInTheDocument();
+@@ -110,8 +110,8 @@ describe("StudySchedulerSettingsPanel", () => {
+       />,
+     );
+ 
+-    expect(screen.getByText("Again interval")).toBeInTheDocument();
+-    expect(screen.getByLabelText("Again interval in minutes")).toBeInTheDocument();
++    expect(screen.getByText("Review interval")).toBeInTheDocument();
++    expect(screen.getByLabelText("Review interval in minutes")).toBeInTheDocument();
+     expect(screen.queryByLabelText("Good interval in minutes")).not.toBeInTheDocument();
+     expect(screen.queryByLabelText("Desired retention percent")).not.toBeInTheDocument();
+     expect(screen.queryByText("Adaptive FSRS")).not.toBeInTheDocument();
+diff --git a/frontend-react/src/features/study/components/StudySchedulerSettingsPanel.tsx b/frontend-react/src/features/study/components/StudySchedulerSettingsPanel.tsx
+index e16c9cc..c2bd7c5 100644
+--- a/frontend-react/src/features/study/components/StudySchedulerSettingsPanel.tsx
++++ b/frontend-react/src/features/study/components/StudySchedulerSettingsPanel.tsx
+@@ -150,10 +150,10 @@ export function StudySchedulerSettingsPanel({
+     !advancedSettingsEnabled
+       ? againValid
+         ? `Again cards reappear after ${formatStudyInterval(parsedAgain)}.`
+-        : "Use a whole number for the Again interval."
++        : "Use a whole number for the interval."
+       : againValid && goodValid && retentionValid
+       ? [
+-          `${formatStudyInterval(parsedAgain)} again`,
++          `${formatStudyInterval(parsedAgain)} missed`,
+           `${formatStudyInterval(parsedGood)} good`,
+           `${normalizedRetention}% target`,
+           estimate ? `${estimate.learnDueNowCount} due now` : null,
+@@ -171,7 +171,7 @@ export function StudySchedulerSettingsPanel({
+         <div>
+           <div className="arcade-label text-muted-foreground">Study</div>
+           <div className="text-base font-semibold tracking-tight text-foreground">
+-            {advancedSettingsEnabled ? "FSRS schedule" : "Again interval"}
++            {advancedSettingsEnabled ? "FSRS schedule" : "Review interval"}
+           </div>
+           <div className="mt-1 max-w-xl text-xs font-medium leading-relaxed text-muted-foreground">
+             {scheduleSummary}
+@@ -202,12 +202,12 @@ export function StudySchedulerSettingsPanel({
+ 
+       <div className={advancedSettingsEnabled ? "grid gap-3 sm:grid-cols-3" : "grid gap-3 sm:grid-cols-[minmax(0,14rem)]"}>
+         <NumberField
+-          label="Again"
++          label={advancedSettingsEnabled ? "Missed" : "Interval"}
+           suffix="min"
+           value={againDraft}
+           min={0}
+           onChange={setAgainDraft}
+-          ariaLabel="Again interval in minutes"
++          ariaLabel={advancedSettingsEnabled ? "Missed cards interval in minutes" : "Review interval in minutes"}
+         />
+         {advancedSettingsEnabled ? (
+           <>
+@@ -236,7 +236,7 @@ export function StudySchedulerSettingsPanel({
+         <div className="rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm font-medium text-destructive">
+           {advancedSettingsEnabled
+             ? "Use whole numbers. Retention must be 70-99."
+-            : "Use a whole number for the Again interval."}
++            : "Use a whole number for the interval."}
+         </div>
+       ) : null}
+ 

@@ -1,0 +1,71 @@
+# Headful Codex screen capture
+
+This worker ran in the interactive Codex TUI. The final visible pane capture is below.
+
+```text
+  └ (no output)
+
+• Waited for background terminal · bun run --cwd frontend-react test -- src/features/decks/lib/deckBrowser.test.ts src/features/decks/components/DeckBrowserTable.test.tsx src/features/decks/components/MainAppRoute.test.tsx src/features/study/lib/
+reviewScheduler.test.ts
+
+• Waited for background terminal
+
+• Waited for background terminal · bun run --cwd frontend-react test -- src/features/decks/lib/deckBrowser.test.ts src/features/decks/components/DeckBrowserTable.test.tsx src/features/decks/components/MainAppRoute.test.tsx src/features/study/lib/
+reviewScheduler.test.ts
+
+• Ran bun run --cwd frontend-react test -- src/features/decks/lib/deckBrowser.test.ts src/features/decks/components/DeckBrowserTable.test.tsx src/features/decks/components/MainAppRoute.test.tsx src/features/study/lib/reviewScheduler.test.ts
+  └
+     RUN  v4.1.4 /Users/ahmedelamin/repos/projects/simplecards/.codex-fleet/worktrees/20260429-154017-6871/20260429-154018-428799-we-still-have-the-issue-where-the-state-in-decks-and-als-per/frontend-react
+    … +5 lines (ctrl + t to view transcript)
+       Duration  11.95s (transform 758ms, setup 469ms, import 900ms, tests 11.17s, environment 1.35s)
+
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• Lint and the focused tests are green now. I’m running the frontend build once to catch type/build issues from the new row field and merged activity types.
+
+• Ran bun run --cwd frontend-react build
+  └ Using Vite Environment API (experimental)
+    vite v8.0.3 building client environment for production...
+    … +107 lines (ctrl + t to view transcript)
+
+    ✓ built in 550ms
+
+• Ran git diff --stat
+  └  .../decks/components/DeckBrowserTable.test.tsx     |  7 +-
+     .../features/decks/components/DeckBrowserTable.tsx | 17 ++++-
+    … +2 lines (ctrl + t to view transcript)
+     .../src/features/decks/lib/deckBrowser.ts          |  6 +-
+     5 files changed, 100 insertions(+), 29 deletions(-)
+
+• Ran git status --short
+  └  M frontend-react/src/features/decks/components/DeckBrowserTable.test.tsx
+     M frontend-react/src/features/decks/components/DeckBrowserTable.tsx
+     M frontend-react/src/features/decks/components/MainAppRoute.test.tsx
+     M frontend-react/src/features/decks/components/MainAppRoute.tsx
+     M frontend-react/src/features/decks/lib/deckBrowser.ts
+
+• Ran git diff -- frontend-react/src/features/decks/lib/deckBrowser.ts frontend-react/src/features/decks/components/DeckBrowserTable.tsx frontend-react/src/features/decks/components/MainAppRoute.tsx | sed -n '1,240p'
+  └ diff --git a/frontend-react/src/features/decks/components/DeckBrowserTable.tsx b/frontend-react/src/features/decks/components/DeckBrowserTable.tsx
+    index c1c01ab..82b1897 100644
+    … +236 lines (ctrl + t to view transcript)
+           .filter((card): card is CardActivity => Boolean(card));
+    @@ -198,6 +201,7 @@ export function buildDeckBrowserRows(
+
+• Waited for background terminal
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• Implemented the deck state fix in the worker checkout.
+
+  Summary:
+
+  - Deck browser rows now track saved review progress separately via reviewedCount, so New is not inflated when a card has a saved Learn or Due state.
+  - Deck browser and selected-deck summaries now show Due alongside New and Learn.
+Token usage: total=188,351 input=163,455 (+ 5,668,224 cached) output=24,896 (reasoning 10,992)
+To continue this session, run codex resume 019ddac1-b66c-7582-9412-a3719284dcc8
+
+
+
+
+```

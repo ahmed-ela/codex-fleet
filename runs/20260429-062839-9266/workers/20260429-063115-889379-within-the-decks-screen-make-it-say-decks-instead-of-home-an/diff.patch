@@ -1,0 +1,233 @@
+diff --git a/frontend-react/src/features/decks/components/DeckDesktopMenu.test.tsx b/frontend-react/src/features/decks/components/DeckDesktopMenu.test.tsx
+index fec99c8..a4137e1 100644
+--- a/frontend-react/src/features/decks/components/DeckDesktopMenu.test.tsx
++++ b/frontend-react/src/features/decks/components/DeckDesktopMenu.test.tsx
+@@ -39,11 +39,11 @@ describe("DeckDesktopMenu", () => {
+     expect(screen.getByTestId("deck-title-meta")).toHaveTextContent("New 1 Learn 1 Due 1");
+   });
+ 
+-  it("renders the navigation button with a home icon", () => {
++  it("renders the navigation button with the Nocards logo and label", () => {
+     render(
+       <DeckDesktopMenu
+         model={{
+-          navigationLabel: "Home",
++          navigationLabel: "Decks",
+           onNavigation: vi.fn(),
+           trailingActions: [
+             {
+@@ -57,8 +57,10 @@ describe("DeckDesktopMenu", () => {
+       />,
+     );
+ 
+-    const icon = screen.getByRole("button", { name: "Home" }).querySelector("svg");
++    const navigationButton = screen.getByRole("button", { name: "Decks" });
++    const icon = navigationButton.querySelector("svg");
+     expect(icon).not.toBeNull();
++    expect(navigationButton).toHaveTextContent("Decks");
+   });
+ 
+   it("omits the title stack when no title or meta is provided", () => {
+@@ -105,7 +107,7 @@ describe("DeckDesktopMenu", () => {
+     );
+ 
+     const buttons = screen.getAllByRole("button").map((button) => button.textContent);
+-    expect(buttons).toEqual(["", "Go Back", "Select", ""]);
++    expect(buttons).toEqual(["Nocards", "Go Back", "Select", ""]);
+   });
+ 
+   it("renders the leading action before the primary action", () => {
+@@ -131,14 +133,14 @@ describe("DeckDesktopMenu", () => {
+     );
+ 
+     const buttons = screen.getAllByRole("button").map((button) => button.textContent);
+-    expect(buttons).toEqual(["", "Add deck", "Add card", ""]);
++    expect(buttons).toEqual(["Nocards", "Add deck", "Add card", ""]);
+   });
+ 
+   it("renders area header actions in a separate deck area", () => {
+     render(
+       <DeckDesktopMenu
+         model={{
+-          navigationLabel: "Home",
++          navigationLabel: "Decks",
+           onNavigation: vi.fn(),
+           trailingActions: [
+             { id: "add-card", label: "Add card", onClick: vi.fn(), variant: "default" },
+diff --git a/frontend-react/src/features/decks/components/DeckDesktopMenu.tsx b/frontend-react/src/features/decks/components/DeckDesktopMenu.tsx
+index 0c2348b..3d5adb0 100644
+--- a/frontend-react/src/features/decks/components/DeckDesktopMenu.tsx
++++ b/frontend-react/src/features/decks/components/DeckDesktopMenu.tsx
+@@ -1,9 +1,55 @@
+ "use client";
+ 
+-import { Home } from "lucide-react";
+ import type { DeckScreenAction, DeckScreenHeaderModel } from "@/features/decks/types";
+ import { Button } from "@/shared/ui/button";
+ 
++function NocardsLogoMark({ className }: { className?: string }) {
++  return (
++    <svg
++      xmlns="http://www.w3.org/2000/svg"
++      viewBox="0 0 64 64"
++      fill="none"
++      className={className}
++      aria-hidden="true"
++    >
++      <g transform="translate(2.625 5.95304)">
++        <rect
++          x="14.5"
++          y="7.5"
++          width="30"
++          height="30"
++          rx="8"
++          transform="rotate(-7 14.5 7.5)"
++          stroke="currentColor"
++          strokeWidth="3.5"
++          strokeLinejoin="round"
++        />
++        <rect
++          x="8.5"
++          y="13.5"
++          width="30"
++          height="30"
++          rx="8"
++          transform="rotate(-4 8.5 13.5)"
++          stroke="currentColor"
++          strokeWidth="3.5"
++          strokeLinejoin="round"
++        />
++        <rect
++          x="19.75"
++          y="17.75"
++          width="30.5"
++          height="30.5"
++          rx="8.5"
++          stroke="currentColor"
++          strokeWidth="3.5"
++          strokeLinejoin="round"
++        />
++      </g>
++    </svg>
++  );
++}
++
+ function isIconOnlyAction(action: DeckScreenAction) {
+   return action.iconOnly ?? Boolean(action.icon && !action.label.trim());
+ }
+@@ -43,12 +89,13 @@ export function DeckDesktopMenu({ model }: { model: DeckScreenHeaderModel }) {
+   const navigationButton = (
+     <Button
+       variant="ghost"
+-      size="icon"
+-      className="h-10 w-10 lg:h-8 lg:w-8"
++      size="default"
++      className="h-10 px-3 text-sm font-semibold lg:h-8 lg:px-2.5"
+       onClick={onNavigation}
+       aria-label={navigationLabel}
+     >
+-      <Home className="h-4 w-4" aria-hidden="true" />
++      <NocardsLogoMark className="h-5 w-5 shrink-0 lg:h-4 lg:w-4" />
++      <span>{navigationLabel}</span>
+     </Button>
+   );
+   const hasTitleBlock = Boolean(title || titleMeta);
+diff --git a/frontend-react/src/features/decks/components/MainAppRoute.test.tsx b/frontend-react/src/features/decks/components/MainAppRoute.test.tsx
+index 0892b4c..ee4f023 100644
+--- a/frontend-react/src/features/decks/components/MainAppRoute.test.tsx
++++ b/frontend-react/src/features/decks/components/MainAppRoute.test.tsx
+@@ -317,12 +317,12 @@ async function waitForPreviewCards(count?: number) {
+ }
+ 
+ async function returnToDeckHome() {
+-  fireEvent.click(getPrimaryHomeButton())
++  fireEvent.click(getPrimaryDecksButton())
+   await waitFor(() => expect(replaceMock).toHaveBeenLastCalledWith('/'))
+ }
+ 
+-function getPrimaryHomeButton() {
+-  return screen.getAllByRole('button', { name: 'Home' }).at(-1)!
++function getPrimaryDecksButton() {
++  return screen.getAllByRole('button', { name: 'Decks' }).at(0)!
+ }
+ 
+ function expectVisibleCountLabel(label: string) {
+@@ -721,7 +721,7 @@ describe('MainAppRoute', () => {
+       })
+     })
+ 
+-    fireEvent.click(getPrimaryHomeButton())
++    fireEvent.click(getPrimaryDecksButton())
+ 
+     await waitFor(() => expect(screen.queryByTestId('study-stage-surface')).not.toBeInTheDocument())
+     expectVisibleCountLabel('New 0')
+@@ -768,7 +768,7 @@ describe('MainAppRoute', () => {
+ 
+     expect(screen.getAllByText('Biology prompt answer').length).toBeGreaterThan(0)
+ 
+-    fireEvent.click(getPrimaryHomeButton())
++    fireEvent.click(getPrimaryDecksButton())
+ 
+     await waitFor(() => expect(screen.queryByTestId('study-stage-surface')).not.toBeInTheDocument())
+     expectVisibleCountLabel('New 1')
+@@ -803,7 +803,8 @@ describe('MainAppRoute', () => {
+     renderCardsRoute()
+     await waitForPreviewCards()
+ 
+-    expect(getPrimaryHomeButton()).toBeInTheDocument()
++    expect(getPrimaryDecksButton()).toBeInTheDocument()
++    expect(screen.queryByRole('button', { name: 'Home' })).not.toBeInTheDocument()
+     expect(screen.getByRole('button', { name: 'Select' })).toBeInTheDocument()
+     expect(screen.queryByRole('button', { name: 'Study' })).not.toBeInTheDocument()
+     expect(screen.getByRole('button', { name: 'Cram' })).toBeInTheDocument()
+@@ -898,7 +899,7 @@ describe('MainAppRoute', () => {
+       await new Promise((resolve) => setTimeout(resolve, STUDY_FEEDBACK_MS + 50))
+     })
+ 
+-    fireEvent.click(getPrimaryHomeButton())
++    fireEvent.click(getPrimaryDecksButton())
+ 
+     await waitFor(() => expect(screen.queryByTestId('study-stage-surface')).not.toBeInTheDocument())
+     expect(screen.getByText((_content, node) => node?.textContent === 'Due 1')).toBeInTheDocument()
+diff --git a/frontend-react/src/features/decks/components/MainAppRoute.tsx b/frontend-react/src/features/decks/components/MainAppRoute.tsx
+index e679b08..5a2e15d 100644
+--- a/frontend-react/src/features/decks/components/MainAppRoute.tsx
++++ b/frontend-react/src/features/decks/components/MainAppRoute.tsx
+@@ -1921,6 +1921,8 @@ export function MainAppRoute({
+   );
+ 
+   const handleOpenDecksHome = React.useCallback(() => {
++    setActiveStudySession(null);
++    setStudyMode(null);
+     router.replace(buildDecksUrl());
+   }, [router]);
+ 
+@@ -2878,7 +2880,7 @@ export function MainAppRoute({
+ 
+   const decksHeaderModel = React.useMemo<DeckScreenHeaderModel>(
+     () => ({
+-      navigationLabel: "Home",
++      navigationLabel: "Decks",
+       onNavigation: handleOpenDecksHome,
+       trailingActions: [
+         {
+@@ -2925,18 +2927,11 @@ export function MainAppRoute({
+ 
+   const cardsHeaderModel = React.useMemo<DeckScreenHeaderModel>(
+     () => ({
+-      navigationLabel: "Home",
++      navigationLabel: "Decks",
+       onNavigation: handleOpenDecksHome,
+       title: workspaceTitle,
+       titleMeta: workspaceTitleMeta,
+       leadingActions: [
+-        {
+-          id: "go-back",
+-          label: "Home",
+-          onClick: handleOpenDecksHome,
+-          icon: Home,
+-          variant: "outline",
+-        },
+         {
+           id: "select",
+           label: selectionMode ? "Selecting" : "Select",

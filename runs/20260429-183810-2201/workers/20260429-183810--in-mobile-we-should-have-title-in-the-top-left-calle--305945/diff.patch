@@ -1,0 +1,58 @@
+diff --git a/frontend-react/src/features/decks/components/DeckDesktopShell.tsx b/frontend-react/src/features/decks/components/DeckDesktopShell.tsx
+index c8e4c14..e42943b 100644
+--- a/frontend-react/src/features/decks/components/DeckDesktopShell.tsx
++++ b/frontend-react/src/features/decks/components/DeckDesktopShell.tsx
+@@ -31,6 +31,18 @@ export function DeckDesktopShell({ model }: { model: DeckScreenModel }) {
+                 </div>
+               </div>
+             ) : null}
++            {!model.desktopViewport && model.mode === "decks" ? (
++              <div className="mx-auto w-full max-w-6xl px-2.5 sm:px-4 lg:hidden">
++                <div className="deck-browser-header-frame">
++                  <h1
++                    data-testid="deck-mobile-home-title"
++                    className="px-0.5 text-left text-lg font-semibold leading-7 text-foreground"
++                  >
++                    Decks
++                  </h1>
++                </div>
++              </div>
++            ) : null}
+             <div className="mx-auto w-full max-w-6xl px-2.5 sm:px-4">
+               {model.decksContent}
+             </div>
+diff --git a/frontend-react/src/features/decks/components/MainAppRoute.test.tsx b/frontend-react/src/features/decks/components/MainAppRoute.test.tsx
+index 5f046f4..ae1f76c 100644
+--- a/frontend-react/src/features/decks/components/MainAppRoute.test.tsx
++++ b/frontend-react/src/features/decks/components/MainAppRoute.test.tsx
+@@ -549,6 +549,30 @@ describe('MainAppRoute', () => {
+     expect(screen.getByRole('button', { name: 'Add deck' })).toBeInTheDocument()
+   })
+ 
++  it('shows a top-left Decks title on the mobile deck browser home', async () => {
++    Object.defineProperty(window, 'matchMedia', {
++      writable: true,
++      value: vi.fn().mockImplementation(() => ({
++        matches: false,
++        media: '',
++        onchange: null,
++        addListener: vi.fn(),
++        removeListener: vi.fn(),
++        addEventListener: vi.fn(),
++        removeEventListener: vi.fn(),
++        dispatchEvent: vi.fn(),
++      })),
++    })
++
++    renderDecksRoute()
++
++    expect(await screen.findByRole('button', { name: 'Biology' })).toBeInTheDocument()
++    const mobileTitle = screen.getByTestId('deck-mobile-home-title')
++    expect(mobileTitle).toHaveTextContent('Decks')
++    expect(mobileTitle).toHaveClass('text-left')
++    expect(screen.queryByRole('button', { name: 'Decks' })).not.toBeInTheDocument()
++  })
++
+   it('shows the mobile deck home add action as a floating Add deck button', async () => {
+     Object.defineProperty(window, 'matchMedia', {
+       writable: true,

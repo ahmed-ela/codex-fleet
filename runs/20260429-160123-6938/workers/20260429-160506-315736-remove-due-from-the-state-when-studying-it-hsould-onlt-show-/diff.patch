@@ -1,0 +1,153 @@
+diff --git a/frontend-react/src/features/decks/components/MainAppRoute.test.tsx b/frontend-react/src/features/decks/components/MainAppRoute.test.tsx
+index 8cef6db..92aa68b 100644
+--- a/frontend-react/src/features/decks/components/MainAppRoute.test.tsx
++++ b/frontend-react/src/features/decks/components/MainAppRoute.test.tsx
+@@ -786,7 +786,7 @@ describe('MainAppRoute', () => {
+     const studyControls = screen.getByLabelText('Study controls')
+     expect(within(studyControls).getByText((_content, node) => node?.textContent === 'New 1')).toBeInTheDocument()
+     expect(within(studyControls).getByText((_content, node) => node?.textContent === 'Learn 0')).toBeInTheDocument()
+-    expect(within(studyControls).getByText((_content, node) => node?.textContent === 'Due 0')).toBeInTheDocument()
++    expect(within(studyControls).queryByText((_content, node) => node?.textContent === 'Due 0')).not.toBeInTheDocument()
+     fireEvent.keyDown(studySurface, { key: ' ', code: 'Space' })
+     fireEvent.click(within(studyControls).getByRole('button', { name: /^Good\b/ }))
+ 
+@@ -1001,7 +1001,7 @@ describe('MainAppRoute', () => {
+     const studyControls = screen.getByLabelText('Study controls')
+     expect(within(studyControls).getByText((_content, node) => node?.textContent === 'New 1')).toBeInTheDocument()
+     expect(within(studyControls).getByText((_content, node) => node?.textContent === 'Learn 0')).toBeInTheDocument()
+-    expect(within(studyControls).getByText((_content, node) => node?.textContent === 'Due 0')).toBeInTheDocument()
++    expect(within(studyControls).queryByText((_content, node) => node?.textContent === 'Due 0')).not.toBeInTheDocument()
+ 
+     fireEvent.keyDown(studySurface, { key: ' ', code: 'Space' })
+     fireEvent.click(within(studyControls).getByRole('button', { name: /^Good\b/ }))
+diff --git a/frontend-react/src/features/study/components/StudyControls.test.tsx b/frontend-react/src/features/study/components/StudyControls.test.tsx
+index a6e4165..35faa45 100644
+--- a/frontend-react/src/features/study/components/StudyControls.test.tsx
++++ b/frontend-react/src/features/study/components/StudyControls.test.tsx
+@@ -14,13 +14,15 @@ describe('StudyControls', () => {
+         flipped={false}
+         learningCount={2}
+         unseenCount={3}
+-        dueCount={4}
+         onBack={onBack}
+         onToggleReference={onToggleReference}
+       />,
+     )
+ 
+     expect(screen.getByText('Show Answer')).toBeInTheDocument()
++    expect(screen.getByText((_content, node) => node?.textContent === 'New 3')).toBeInTheDocument()
++    expect(screen.getByText((_content, node) => node?.textContent === 'Learn 2')).toBeInTheDocument()
++    expect(screen.queryByText((_content, node) => node?.textContent === 'Due 4')).not.toBeInTheDocument()
+     expect(screen.getByTestId('study-show-answer-hint')).toHaveClass('hidden', 'lg:flex')
+     expect(screen.getByLabelText('Home')).toBeInTheDocument()
+     expect(screen.queryByLabelText('Reset session')).not.toBeInTheDocument()
+diff --git a/frontend-react/src/features/study/components/StudyControls.tsx b/frontend-react/src/features/study/components/StudyControls.tsx
+index 8c4494d..cd12006 100644
+--- a/frontend-react/src/features/study/components/StudyControls.tsx
++++ b/frontend-react/src/features/study/components/StudyControls.tsx
+@@ -33,7 +33,6 @@ export function StudyControls({
+   studyEstimateMeta = null,
+   learningCount = 0,
+   unseenCount = 0,
+-  dueCount = 0,
+   onBack = noop,
+   onWrong = noop,
+   onRight = noop,
+@@ -56,7 +55,6 @@ export function StudyControls({
+   studyEstimateMeta?: string | null;
+   learningCount?: number;
+   unseenCount?: number;
+-  dueCount?: number;
+   onBack?: () => void;
+   onWrong?: () => void;
+   onRight?: () => void;
+@@ -188,9 +186,8 @@ export function StudyControls({
+                 {showReviewSummary ? (
+                   <ReviewStateSummary
+                     items={[
+-                      { label: "Learn", value: learningCount, tone: "learn" },
+                       { label: "New", value: unseenCount, tone: "new" },
+-                      { label: "Due", value: dueCount, tone: "due" },
++                      { label: "Learn", value: learningCount, tone: "learn" },
+                     ]}
+                     className="hidden lg:flex"
+                   />
+diff --git a/frontend-react/src/features/study/components/StudyDeckOverlay.test.tsx b/frontend-react/src/features/study/components/StudyDeckOverlay.test.tsx
+index b45c92c..cc01e7d 100644
+--- a/frontend-react/src/features/study/components/StudyDeckOverlay.test.tsx
++++ b/frontend-react/src/features/study/components/StudyDeckOverlay.test.tsx
+@@ -217,7 +217,7 @@ describe('StudyDeckOverlay', () => {
+     expect(await screen.findByRole('button', { name: 'Home' })).toBeInTheDocument()
+     expect(screen.getByText(textContentEquals('Learn 0'))).toBeInTheDocument()
+     expect(screen.getByText(textContentEquals('New 1'))).toBeInTheDocument()
+-    expect(screen.getByText(textContentEquals('Due 0'))).toBeInTheDocument()
++    expect(screen.queryByText(textContentEquals('Due 0'))).not.toBeInTheDocument()
+     expect(screen.queryByText('Covered')).not.toBeInTheDocument()
+     expect(await screen.findAllByTestId('occlusion-cover')).toHaveLength(1)
+     screen.getByTestId('study-stage-surface').focus()
+@@ -733,7 +733,7 @@ describe('StudyDeckOverlay', () => {
+ 
+     expect(await screen.findByText(textContentEquals('Learn 0'))).toBeInTheDocument()
+     expect(screen.getByText(textContentEquals('New 1'))).toBeInTheDocument()
+-    expect(screen.getByText(textContentEquals('Due 1'))).toBeInTheDocument()
++    expect(screen.queryByText(textContentEquals('Due 1'))).not.toBeInTheDocument()
+   })
+ 
+   it('splits remaining cards into learning and unseen when the again interval repeats in the current session', async () => {
+@@ -859,7 +859,7 @@ describe('StudyDeckOverlay', () => {
+     expect(await screen.findByText('Question 1')).toBeInTheDocument()
+     expect(screen.getByText(textContentEquals('Learn 0'))).toBeInTheDocument()
+     expect(screen.getByText(textContentEquals('New 2'))).toBeInTheDocument()
+-    expect(screen.getByText(textContentEquals('Due 0'))).toBeInTheDocument()
++    expect(screen.queryByText(textContentEquals('Due 0'))).not.toBeInTheDocument()
+ 
+     fireEvent.keyDown(screen.getByTestId('study-stage-surface'), { key: ' ', code: 'Space' })
+     expect(screen.getByRole('button', { name: /^Again\b/ })).toHaveAttribute('title', 'Again (10m)')
+@@ -878,7 +878,7 @@ describe('StudyDeckOverlay', () => {
+     )
+     expect(screen.getByText(textContentEquals('Learn 0'))).toBeInTheDocument()
+     expect(screen.getByText(textContentEquals('New 1'))).toBeInTheDocument()
+-    expect(screen.getByText(textContentEquals('Due 0'))).toBeInTheDocument()
++    expect(screen.queryByText(textContentEquals('Due 0'))).not.toBeInTheDocument()
+   })
+ 
+   it('cancels a pending good answer with Cmd+Z before the card advances', async () => {
+@@ -1528,7 +1528,7 @@ describe('StudyDeckOverlay', () => {
+     expect(await screen.findByText('Lazy Question 1')).toBeInTheDocument()
+     await waitFor(() => expect(getCardsByIdsMock).toHaveBeenCalledWith(['card-2']))
+     expect(screen.getByText(textContentEquals('New 1'))).toBeInTheDocument()
+-    expect(screen.getByText(textContentEquals('Due 1'))).toBeInTheDocument()
++    expect(screen.queryByText(textContentEquals('Due 1'))).not.toBeInTheDocument()
+ 
+     fireEvent.keyDown(screen.getByTestId('study-stage-surface'), { key: ' ', code: 'Space' })
+     fireEvent.click(screen.getByRole('button', { name: /^Good\b/ }))
+@@ -1540,7 +1540,7 @@ describe('StudyDeckOverlay', () => {
+     expect(await screen.findByText('Loading card…')).toBeInTheDocument()
+     expect(screen.getByText(textContentEquals('Learn 0'))).toBeInTheDocument()
+     expect(screen.getByText(textContentEquals('New 0'))).toBeInTheDocument()
+-    expect(screen.getByText(textContentEquals('Due 1'))).toBeInTheDocument()
++    expect(screen.queryByText(textContentEquals('Due 1'))).not.toBeInTheDocument()
+     expect(screen.queryByText(textContentEquals('New 2'))).not.toBeInTheDocument()
+ 
+     await act(async () => {
+@@ -1599,7 +1599,7 @@ describe('StudyDeckOverlay', () => {
+     expect(await screen.findByText('Loading card…')).toBeInTheDocument()
+     expect(screen.getByText(textContentEquals('Learn 0'))).toBeInTheDocument()
+     expect(screen.getByText(textContentEquals('New 1'))).toBeInTheDocument()
+-    expect(screen.getByText(textContentEquals('Due 0'))).toBeInTheDocument()
++    expect(screen.queryByText(textContentEquals('Due 0'))).not.toBeInTheDocument()
+     expect(screen.queryByText(textContentEquals('New 2'))).not.toBeInTheDocument()
+ 
+     await act(async () => {
+diff --git a/frontend-react/src/features/study/components/StudyDeckOverlay.tsx b/frontend-react/src/features/study/components/StudyDeckOverlay.tsx
+index 2717f68..35e5bef 100644
+--- a/frontend-react/src/features/study/components/StudyDeckOverlay.tsx
++++ b/frontend-react/src/features/study/components/StudyDeckOverlay.tsx
+@@ -1851,7 +1851,6 @@ export function StudyDeckOverlay({
+             showReviewSummary={!deckMobileViewport}
+             learningCount={effectiveReviewCounts.learnCount}
+             unseenCount={effectiveReviewCounts.newCount}
+-            dueCount={effectiveReviewCounts.dueCount}
+             cardTimeMeta={currentCardTimeMeta}
+             studyEstimateMeta={liveStudyEstimateMeta}
+             onBack={handleClose}

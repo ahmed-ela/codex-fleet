@@ -1,0 +1,64 @@
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• The focused Vitest suite passes. I’m doing one lint pass now because this touched React hooks/dependencies and an
+  exported helper.
+
+• Ran bun run lint
+  └
+    /Users/ahmedelamin/repos/projects/simplecards/.codex-fleet/
+    … +5 lines (ctrl + t to view transcript)
+    ✖ 1 problem (0 errors, 1 warning)
+
+
+• Edited frontend-react/src/features/decks/components/MainAppRoute.tsx (+4 -1)
+    779    const savedStudySessionsByKey = React.useMemo(
+    780 -    () => readLocalSavedStudySessions(),
+    780 +    () => {
+    781 +      void savedStudySessionsVersion;
+    782 +      return readLocalSavedStudySessions();
+    783 +    },
+    784      [savedStudySessionsVersion],
+
+• Ran bun run lint
+  └ (no output)
+
+• Ran bun run test src/features/decks/components/MainAppRoute.test.tsx
+  └
+     RUN  v4.1.4 /Users/ahmedelamin/repos/projects/simplecards/.codex-fleet/
+    … +6 lines (ctrl + t to view transcript)
+       Duration  12.69s (transform 396ms, setup 82ms, import 407ms, tests 11.76s, environment 267ms)
+
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• Lint is clean and the route suite still passes after the hook tweak. I’m running a build as the final compile check.
+
+• Ran bun run build
+  └ Using Vite Environment API (experimental)
+    vite v8.0.3 building client environment for production...
+    … +113 lines (ctrl + t to view transcript)
+
+    ✓ built in 574ms
+
+• Ran git status --short
+  └  M frontend-react/src/features/decks/components/MainAppRoute.test.tsx
+     M frontend-react/src/features/decks/components/MainAppRoute.tsx
+     M frontend-react/src/features/study/lib/studySessionStore.ts
+
+• Explored
+  └ Read MainAppRoute.test.tsx, MainAppRoute.tsx, studySessionStore.ts
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• Changed
+
+  - Deck browser rows and the selected deck header now use unfinished saved study-session counts when present, so a resumed
+    Cram session showing New 12 / Learn 6 is reflected outside the study overlay instead of falling back to stale 19 / 0.
+  - Added a local saved-session snapshot reader and refreshes it on storage/focus and after closing study.
+
+  Files Changed
+Token usage: total=170,785 input=147,743 (+ 4,641,536 cached) output=23,042 (reasoning 10,185)
+To continue this session, run codex resume 019ddaed-79fb-7083-8fc9-e0cb3f3d5384
+
+
+

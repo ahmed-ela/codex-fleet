@@ -1,0 +1,3 @@
+{"base_ref": "HEAD", "base_sha": "296eafd2aa1d7d4de63c188bff6499d7516bd6a3", "event": "live_run_created", "run_id": "20260429-041105-5806", "ts": "2026-04-29T04:11:05-04:00"}
+{"event": "live_cancel_requested", "reason": "frontend_cancel", "ts": "2026-04-29T04:11:08-04:00"}
+{"event": "live_canceled", "reason": "frontend_cancel", "ts": "2026-04-29T04:11:08-04:00", "worktrees_removed": 0}

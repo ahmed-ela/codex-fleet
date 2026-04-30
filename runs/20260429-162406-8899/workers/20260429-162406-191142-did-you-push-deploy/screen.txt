@@ -1,0 +1,64 @@
+• Ran bun run deploy:prod
+  └ Using Vite Environment API (experimental)
+    vite v8.0.3 building client environment for production...
+    … +184 lines (ctrl + t to view transcript)
+      www.nocards.app (custom domain - zone name: nocards.app)
+    Current Version ID: 908cbb54-b143-4e02-8069-cd39194420f4
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• Production deploy completed with Cloudflare version 908cbb54-b143-4e02-8069-cd39194420f4. I’m doing the final remote-branch and live HTTP checks now so the answer is based on the deployed state, not just the CLI success line.
+
+• Ran git status --short --branch && jj status --no-pager
+  └ ## HEAD (no branch)
+    Warning: The working-copy commit in workspace 'default' became immutable, so a new commit has been created on top of it.
+    … +4 lines (ctrl + t to view transcript)
+    Working copy  (@) : wwvwmttn a861d369 (empty) (no description set)
+    Parent commit (@-): xxvmkmso 5040bd20 codex/20260429-162406-deploy-5040bd2@origin | (no description set)
+
+• Ran git ls-remote origin refs/heads/codex/20260429-162406-deploy-5040bd2 && git branch -r --contains HEAD
+  └ 5040bd2001767965b12a3934c6dd7047fbce0fd2    refs/heads/codex/20260429-162406-deploy-5040bd2
+      origin/codex/20260429-162406-deploy-5040bd2
+
+• Ran for url in http://nocards.app/ https://nocards.app/ https://www.nocards.app/ https://nocards.app/auth/callback https://simplecards.elaminahmed03.workers.dev/; do printf '\n%s\n' "$url"; curl -sS -o /dev/null -D - --max-time 20 "$url" | awk
+  │ 'BEGIN{IGNORECASE=1} NR==1 || /^location:/ || /^strict-transport-security:/ || /^cache-control:/ {print}'; done
+  └ HTTP/1.1 308 Permanent Redirect
+
+    … +18 lines (ctrl + t to view transcript)
+    cache-control: no-store
+    strict-transport-security: max-age=31536000; includeSubDomains
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• Live checks are clean: the apex and www HTTPS routes return 200 with HSTS/no-store, HTTP redirects with 308, and the auth callback returns the expected state-error redirect. jj also marked the pushed snapshot public and opened a new empty
+  working-copy commit locally; no source files changed.
+
+• Ran git rev-parse HEAD && git log -2 --oneline --decorate
+  └ 5040bd2001767965b12a3934c6dd7047fbce0fd2
+    5040bd2 (HEAD, origin/codex/20260429-162406-deploy-5040bd2)
+    a92a3e7 (origin/codex/20260429-153443-deploy-a92a3e7)
+
+• Ran git diff --stat && git diff --cached --stat && git status --porcelain=v1
+  └ (no output)
+
+• Ran git show --stat --oneline --name-only --no-renames 5040bd2001767965b12a3934c6dd7047fbce0fd2 --
+  └ 5040bd2
+    frontend-react/src/features/decks/components/MainAppRoute.test.tsx
+    … +3 lines (ctrl + t to view transcript)
+    frontend-react/src/features/study/components/StudyDeckOverlay.test.tsx
+    frontend-react/src/features/study/components/StudyDeckOverlay.tsx
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• Yes. I pushed and deployed the snapshot.
+
+  Summary:
+
+  - Pushed 5040bd200176 to origin/codex/20260429-162406-deploy-5040bd2.
+  - Ran guarded deploy flow: bun run deploy:check then bun run deploy:prod.
+  - Production Cloudflare version: 908cbb54-b143-4e02-8069-cd39194420f4.
+Token usage: total=54,186 input=49,223 (+ 285,568 cached) output=4,963 (reasoning 2,166)
+To continue this session, run codex resume 019ddae9-d527-7b73-8e61-8b88d3ba0248
+
+
+

@@ -1,0 +1,75 @@
+diff --git a/frontend-react/src/features/decks/components/DeckDesktopMenu.test.tsx b/frontend-react/src/features/decks/components/DeckDesktopMenu.test.tsx
+index 2842dcf..d708d7a 100644
+--- a/frontend-react/src/features/decks/components/DeckDesktopMenu.test.tsx
++++ b/frontend-react/src/features/decks/components/DeckDesktopMenu.test.tsx
+@@ -185,6 +185,46 @@ describe("DeckDesktopMenu", () => {
+     expect(buttons).toEqual(["Nocards", "Add deck", "Add card", ""]);
+   });
+ 
++  it("pins the deck title to the centered desktop action row", () => {
++    render(
++      <DeckDesktopMenu
++        model={{
++          navigationLabel: "Decks",
++          onNavigation: vi.fn(),
++          title: "Biology",
++          leadingActions: [
++            { id: "select", label: "Select", onClick: vi.fn() },
++          ],
++          trailingActions: [
++            { id: "cram", label: "Cram", onClick: vi.fn() },
++            {
++              id: "settings",
++              label: "Open settings",
++              onClick: vi.fn(),
++              iconOnly: true,
++            },
++          ],
++        }}
++      />,
++    );
++
++    expect(screen.getByTestId("deck-title-stack").parentElement).toHaveClass(
++      "lg:col-start-2",
++      "lg:row-start-1",
++      "lg:pt-0",
++    );
++    expect(screen.getByRole("button", { name: "Select" }).parentElement).toHaveClass(
++      "lg:col-start-1",
++      "lg:row-start-1",
++      "lg:justify-self-start",
++    );
++    expect(screen.getByRole("button", { name: "Cram" }).parentElement).toHaveClass(
++      "lg:col-start-3",
++      "lg:row-start-1",
++      "lg:justify-self-end",
++    );
++  });
++
+   it("renders area header actions in a separate deck area", () => {
+     render(
+       <DeckDesktopMenu
+diff --git a/frontend-react/src/features/decks/components/DeckDesktopMenu.tsx b/frontend-react/src/features/decks/components/DeckDesktopMenu.tsx
+index 70df74a..e6ad648 100644
+--- a/frontend-react/src/features/decks/components/DeckDesktopMenu.tsx
++++ b/frontend-react/src/features/decks/components/DeckDesktopMenu.tsx
+@@ -120,16 +120,16 @@ export function DeckDesktopMenu({ model }: { model: DeckScreenHeaderModel }) {
+       <div className="flex min-w-0 flex-col gap-2">
+         <div className="flex flex-col gap-2 lg:grid lg:min-w-0 lg:grid-cols-[minmax(0,1fr)_minmax(0,16rem)_minmax(0,1fr)] lg:items-center lg:gap-1">
+           {titleBlock ? (
+-            <div className="min-w-0 px-2 pt-0.5 text-center lg:order-2 lg:px-1">
++            <div className="min-w-0 px-2 pt-0.5 text-center lg:order-2 lg:col-start-2 lg:row-start-1 lg:px-1 lg:pt-0">
+               {titleBlock}
+             </div>
+           ) : null}
+           <div className="order-2 flex items-center justify-between gap-2 lg:order-1 lg:contents">
+-            <div className="flex min-w-0 items-center gap-1 lg:col-start-1 lg:justify-self-start">
++            <div className="flex min-w-0 items-center gap-1 lg:col-start-1 lg:row-start-1 lg:justify-self-start">
+               {navigationButton}
+               {leadingActions.map(renderActionButton)}
+             </div>
+-            <div className="flex min-w-0 items-center justify-end gap-1 lg:col-start-3 lg:justify-self-end">
++            <div className="flex min-w-0 items-center justify-end gap-1 lg:col-start-3 lg:row-start-1 lg:justify-self-end">
+               {trailingActions.map(renderActionButton)}
+             </div>
+           </div>

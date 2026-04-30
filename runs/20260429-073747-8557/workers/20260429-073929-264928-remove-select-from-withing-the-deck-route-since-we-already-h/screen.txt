@@ -1,0 +1,23 @@
+     M frontend-react/src/features/decks/components/MainAppRoute.tsx
+
+• Ran git diff --stat
+  └  .../src/features/decks/components/MainAppRoute.test.tsx    | 10 +++++-----
+     .../src/features/decks/components/MainAppRoute.tsx         | 14 --------------
+     2 files changed, 5 insertions(+), 19 deletions(-)
+
+• Explored
+  └ Read MainAppRoute.tsx, MainAppRoute.test.tsx
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• Removed the duplicate in-deck Select header action. Selection mode still works from the desktop deck-browser Select cards
+  menu and the S keyboard shortcut.
+
+  Files changed:
+
+  - frontend-react/src/features/decks/components/MainAppRoute.tsx:2897
+Token usage: total=91,308 input=84,131 (+ 624,384 cached) output=7,177 (reasoning 1,794)
+To continue this session, run codex resume 019dd909-83db-70e1-a3fb-f568bd4394c9
+
+
+

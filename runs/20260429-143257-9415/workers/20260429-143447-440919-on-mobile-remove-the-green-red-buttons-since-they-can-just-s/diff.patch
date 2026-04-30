@@ -1,0 +1,493 @@
+diff --git a/frontend-react/src/features/study/components/StudyControls.test.tsx b/frontend-react/src/features/study/components/StudyControls.test.tsx
+index b0d07a7..f7188b9 100644
+--- a/frontend-react/src/features/study/components/StudyControls.test.tsx
++++ b/frontend-react/src/features/study/components/StudyControls.test.tsx
+@@ -23,7 +23,7 @@ describe('StudyControls', () => {
+     )
+ 
+     expect(screen.getByText('Show Answer')).toBeInTheDocument()
+-    expect(screen.getByTestId('study-show-answer-hint')).toHaveClass('hidden', 'sm:flex')
++    expect(screen.getByTestId('study-show-answer-hint')).toHaveClass('hidden', 'lg:flex')
+     expect(screen.getByLabelText('Home')).toBeInTheDocument()
+     expect(screen.getByLabelText('Reset session')).toBeInTheDocument()
+     expect(screen.getByLabelText('Open card reference')).toBeInTheDocument()
+diff --git a/frontend-react/src/features/study/components/StudyControls.tsx b/frontend-react/src/features/study/components/StudyControls.tsx
+index 4c4455c..b5dd96d 100644
+--- a/frontend-react/src/features/study/components/StudyControls.tsx
++++ b/frontend-react/src/features/study/components/StudyControls.tsx
+@@ -46,6 +46,8 @@ export function StudyControls({
+   referenceDisabled,
+   flipped = false,
+   locked = false,
++  hideAnswerActions = false,
++  showReviewSummary = true,
+   wrongButtonText = "Again",
+   rightButtonText = "Good",
+ }: {
+@@ -69,6 +71,8 @@ export function StudyControls({
+   referenceDisabled?: boolean;
+   flipped?: boolean;
+   locked?: boolean;
++  hideAnswerActions?: boolean;
++  showReviewSummary?: boolean;
+   wrongButtonText?: string;
+   rightButtonText?: string;
+ }) {
+@@ -76,6 +80,12 @@ export function StudyControls({
+   const lockedDisabledClassName = locked && !disabled ? "disabled:!opacity-100" : null;
+   const compactWrongLabel = compactReviewButtonLabel(wrongButtonText, "↺");
+   const compactRightLabel = compactReviewButtonLabel(rightButtonText, "✓");
++  const deckCenterHasMeta = Boolean(cardTimeMeta || studyEstimateMeta);
++  const deckCenterHasVisibleContent =
++    mode !== "deck" ||
++    (flipped
++      ? !hideAnswerActions || deckCenterHasMeta
++      : showReviewSummary || deckCenterHasMeta);
+ 
+   return (
+     <footer className="relative z-30 border-t border-border/60 bg-background px-3 pt-2 pb-[calc(8px+env(safe-area-inset-bottom))] shadow-[0_-8px_24px_rgba(15,23,42,0.06)] sm:px-4 sm:py-3 sm:pb-3">
+@@ -122,6 +132,7 @@ export function StudyControls({
+           className={cn(
+             "flex min-w-0 items-center justify-center",
+             mode === "deck" ? "min-h-16 sm:min-h-14" : null,
++            mode === "deck" && !deckCenterHasVisibleContent ? "hidden" : null,
+             mode === "deck"
+               ? "order-1 col-span-2 sm:order-2 sm:col-span-1"
+               : "order-3 col-span-2 sm:order-2 sm:col-span-1",
+@@ -131,50 +142,52 @@ export function StudyControls({
+           {mode === "deck" ? (
+             flipped ? (
+               <div className="flex w-full flex-col items-center justify-center gap-1.5 sm:w-auto">
+-                <div className="grid w-full grid-cols-2 items-center justify-center gap-2 sm:flex sm:w-auto sm:gap-3">
+-                  <Button
+-                    variant="ghost"
+-                    className={cn(
+-                      "h-12 min-w-0 overflow-hidden rounded-xl border-transparent bg-rose-100 px-3 text-rose-900 hover:bg-rose-200 hover:text-rose-950 sm:h-11 sm:min-w-[7rem] sm:px-4",
+-                      lockedDisabledClassName,
+-                    )}
+-                    onClick={onWrong}
+-                    disabled={controlsDisabled}
+-                    aria-label={`${wrongButtonText} (H / ←)`}
+-                    title={wrongButtonText}
+-                  >
+-                    <span className="hidden min-w-0 max-w-full flex-col items-center justify-center leading-tight max-[639px]:flex" aria-hidden="true">
+-                      <span className="max-w-full truncate text-[1.08rem] font-semibold tabular-nums">{compactWrongLabel.primary}</span>
+-                      {compactWrongLabel.secondary ? (
+-                        <span className="max-w-full truncate text-[0.62rem] font-semibold uppercase tracking-[0.08em] opacity-80">
+-                          {compactWrongLabel.secondary}
+-                        </span>
+-                      ) : null}
+-                    </span>
+-                    <span className="min-w-0 max-w-full truncate max-[639px]:hidden" aria-hidden="true">{wrongButtonText}</span>
+-                  </Button>
+-                  <Button
+-                    variant="ghost"
+-                    className={cn(
+-                      "h-12 min-w-0 overflow-hidden rounded-xl border-transparent bg-emerald-100 px-3 text-emerald-900 hover:bg-emerald-200 hover:text-emerald-950 sm:h-11 sm:min-w-[7rem] sm:px-4",
+-                      lockedDisabledClassName,
+-                    )}
+-                    onClick={onRight}
+-                    disabled={controlsDisabled}
+-                    aria-label={`${rightButtonText} (Space / L / →)`}
+-                    title={rightButtonText}
+-                  >
+-                    <span className="hidden min-w-0 max-w-full flex-col items-center justify-center leading-tight max-[639px]:flex" aria-hidden="true">
+-                      <span className="max-w-full truncate text-[1.08rem] font-semibold tabular-nums">{compactRightLabel.primary}</span>
+-                      {compactRightLabel.secondary ? (
+-                        <span className="max-w-full truncate text-[0.62rem] font-semibold uppercase tracking-[0.08em] opacity-80">
+-                          {compactRightLabel.secondary}
+-                        </span>
+-                      ) : null}
+-                    </span>
+-                    <span className="min-w-0 max-w-full truncate max-[639px]:hidden" aria-hidden="true">{rightButtonText}</span>
+-                  </Button>
+-                </div>
++                {hideAnswerActions ? null : (
++                  <div className="hidden w-full grid-cols-2 items-center justify-center gap-2 lg:flex lg:w-auto lg:gap-3">
++                    <Button
++                      variant="ghost"
++                      className={cn(
++                        "h-12 min-w-0 overflow-hidden rounded-xl border-transparent bg-rose-100 px-3 text-rose-900 hover:bg-rose-200 hover:text-rose-950 sm:h-11 sm:min-w-[7rem] sm:px-4",
++                        lockedDisabledClassName,
++                      )}
++                      onClick={onWrong}
++                      disabled={controlsDisabled}
++                      aria-label={`${wrongButtonText} (H / ←)`}
++                      title={wrongButtonText}
++                    >
++                      <span className="hidden min-w-0 max-w-full flex-col items-center justify-center leading-tight max-[639px]:flex" aria-hidden="true">
++                        <span className="max-w-full truncate text-[1.08rem] font-semibold tabular-nums">{compactWrongLabel.primary}</span>
++                        {compactWrongLabel.secondary ? (
++                          <span className="max-w-full truncate text-[0.62rem] font-semibold uppercase tracking-[0.08em] opacity-80">
++                            {compactWrongLabel.secondary}
++                          </span>
++                        ) : null}
++                      </span>
++                      <span className="min-w-0 max-w-full truncate max-[639px]:hidden" aria-hidden="true">{wrongButtonText}</span>
++                    </Button>
++                    <Button
++                      variant="ghost"
++                      className={cn(
++                        "h-12 min-w-0 overflow-hidden rounded-xl border-transparent bg-emerald-100 px-3 text-emerald-900 hover:bg-emerald-200 hover:text-emerald-950 sm:h-11 sm:min-w-[7rem] sm:px-4",
++                        lockedDisabledClassName,
++                      )}
++                      onClick={onRight}
++                      disabled={controlsDisabled}
++                      aria-label={`${rightButtonText} (Space / L / →)`}
++                      title={rightButtonText}
++                    >
++                      <span className="hidden min-w-0 max-w-full flex-col items-center justify-center leading-tight max-[639px]:flex" aria-hidden="true">
++                        <span className="max-w-full truncate text-[1.08rem] font-semibold tabular-nums">{compactRightLabel.primary}</span>
++                        {compactRightLabel.secondary ? (
++                          <span className="max-w-full truncate text-[0.62rem] font-semibold uppercase tracking-[0.08em] opacity-80">
++                            {compactRightLabel.secondary}
++                          </span>
++                        ) : null}
++                      </span>
++                      <span className="min-w-0 max-w-full truncate max-[639px]:hidden" aria-hidden="true">{rightButtonText}</span>
++                    </Button>
++                  </div>
++                )}
+                 {cardTimeMeta || studyEstimateMeta ? (
+                   <div className="max-w-full truncate text-[11px] font-semibold text-muted-foreground tabular-nums">
+                     {[cardTimeMeta, studyEstimateMeta].filter(Boolean).join(" · ")}
+@@ -185,18 +198,21 @@ export function StudyControls({
+               <div className="flex w-full flex-col items-center justify-center gap-2 pt-1 text-center">
+                 <div
+                   data-testid="study-show-answer-hint"
+-                  className="hidden items-center justify-center gap-2 text-sm font-medium text-foreground sm:flex"
++                  className="hidden items-center justify-center gap-2 text-sm font-medium text-foreground lg:flex"
+                 >
+                   <Kbd className="h-7 min-w-8 px-2 text-[12px]">Space</Kbd>
+                   <span>Show Answer</span>
+                 </div>
+-                <ReviewStateSummary
+-                  items={[
+-                    { label: "Learn", value: learningCount, tone: "learn" },
+-                    { label: "New", value: unseenCount, tone: "new" },
+-                    { label: "Due", value: dueCount, tone: "due" },
+-                  ]}
+-                />
++                {showReviewSummary ? (
++                  <ReviewStateSummary
++                    items={[
++                      { label: "Learn", value: learningCount, tone: "learn" },
++                      { label: "New", value: unseenCount, tone: "new" },
++                      { label: "Due", value: dueCount, tone: "due" },
++                    ]}
++                    className="hidden lg:flex"
++                  />
++                ) : null}
+                 {cardTimeMeta || studyEstimateMeta ? (
+                   <div className="max-w-full truncate text-[11px] font-semibold text-muted-foreground tabular-nums">
+                     {[cardTimeMeta, studyEstimateMeta].filter(Boolean).join(" · ")}
+diff --git a/frontend-react/src/features/study/components/StudyDeckOverlay.test.tsx b/frontend-react/src/features/study/components/StudyDeckOverlay.test.tsx
+index dbd2dd7..dd8a800 100644
+--- a/frontend-react/src/features/study/components/StudyDeckOverlay.test.tsx
++++ b/frontend-react/src/features/study/components/StudyDeckOverlay.test.tsx
+@@ -28,6 +28,8 @@ Object.defineProperty(globalThis, 'localStorage', {
+   configurable: true,
+ })
+ 
++const originalMatchMedia = window.matchMedia
++
+ vi.mock('@/features/cards/components/CardEditorOverlay', async () => {
+   const React = await import('react')
+ 
+@@ -111,10 +113,36 @@ function buildSeedCard(id: string): Card {
+   }
+ }
+ 
++function mockDeckDesktopViewport(matches: boolean) {
++  Object.defineProperty(window, 'matchMedia', {
++    configurable: true,
++    writable: true,
++    value: vi.fn().mockImplementation(() => ({
++      matches,
++      media: '',
++      onchange: null,
++      addListener: vi.fn(),
++      removeListener: vi.fn(),
++      addEventListener: vi.fn(),
++      removeEventListener: vi.fn(),
++      dispatchEvent: vi.fn(),
++    })),
++  })
++}
++
+ afterEach(() => {
+   vi.useRealTimers()
+   vi.restoreAllMocks()
+   storageMock.clear()
++  if (originalMatchMedia) {
++    Object.defineProperty(window, 'matchMedia', {
++      configurable: true,
++      writable: true,
++      value: originalMatchMedia,
++    })
++  } else {
++    Reflect.deleteProperty(window, 'matchMedia')
++  }
+ })
+ 
+ describe('StudyDeckOverlay', () => {
+@@ -244,6 +272,40 @@ describe('StudyDeckOverlay', () => {
+     expect(screen.queryByRole('button', { name: /Undo/i })).not.toBeInTheDocument()
+   })
+ 
++  it('moves mobile study counts into the deck title stack and removes answer buttons', async () => {
++    mockDeckDesktopViewport(false)
++
++    render(
++      <StudyDeckOverlay
++        title="Biology"
++        sessionKey="study-mobile-title-stack"
++        editorDeckId="tag-1"
++        decks={[]}
++        cards={[buildCard('card-1', 'Question 1', 'Answer 1'), buildCard('card-2', 'Question 2', 'Answer 2')]}
++        onEnsureDeck={vi.fn(async (name: string) => ({
++          id: 'tag-1',
++          name,
++          parentId: null,
++          createdAt: '2026-03-09T00:00:00.000Z',
++          updatedAt: '2026-03-09T00:00:00.000Z',
++        }))}
++        onClose={vi.fn()}
++      />,
++    )
++
++    const titleStack = await screen.findByTestId('study-mobile-title-stack')
++    expect(titleStack).toHaveClass('min-h-14', 'pt-1', 'text-center')
++    expect(within(titleStack).getByText('Biology')).toBeInTheDocument()
++    expect(within(titleStack).getByText(textContentEquals('New 2'))).toBeInTheDocument()
++    expect(within(titleStack).getByText(textContentEquals('Learn 0'))).toBeInTheDocument()
++    expect(within(titleStack).queryByText(textContentEquals('Due 0'))).not.toBeInTheDocument()
++
++    fireEvent.keyDown(screen.getByTestId('study-stage-surface'), { key: ' ', code: 'Space' })
++
++    expect(screen.queryByRole('button', { name: /^Again\b/ })).not.toBeInTheDocument()
++    expect(screen.queryByRole('button', { name: /^Good\b/ })).not.toBeInTheDocument()
++  })
++
+   it('keeps answer controls and edit visually stable during answer feedback', async () => {
+     render(
+       <StudyDeckOverlay
+diff --git a/frontend-react/src/features/study/components/StudyDeckOverlay.tsx b/frontend-react/src/features/study/components/StudyDeckOverlay.tsx
+index 5546693..ab011fe 100644
+--- a/frontend-react/src/features/study/components/StudyDeckOverlay.tsx
++++ b/frontend-react/src/features/study/components/StudyDeckOverlay.tsx
+@@ -59,6 +59,7 @@ import {
+   saveStudySession,
+ } from "@/features/study/lib/studySessionStore";
+ import { Button } from "@/shared/ui/button";
++import { ReviewStateSummary } from "@/shared/ui/review-state-summary";
+ import {
+   getCachedSignedUrlForRef,
+   resolveCardImages,
+@@ -95,6 +96,55 @@ function formatDelayedRepeatWait(dueAt: string, nowMs: number) {
+   return formatStudyInterval(remainingMinutes);
+ }
+ 
++function useDeckMobileViewport() {
++  const [mobile, setMobile] = React.useState(false);
++
++  React.useEffect(() => {
++    if (typeof window === "undefined" || typeof window.matchMedia !== "function") return;
++    const media = window.matchMedia("(min-width: 1024px)");
++    if (!media) return;
++    const sync = () => setMobile(!media.matches);
++    sync();
++    media.addEventListener?.("change", sync);
++    media.addListener?.(sync);
++    return () => {
++      media.removeEventListener?.("change", sync);
++      media.removeListener?.(sync);
++    };
++  }, []);
++
++  return mobile;
++}
++
++function StudyMobileTitleStack({
++  title,
++  newCount,
++  learnCount,
++}: {
++  title: string;
++  newCount: number;
++  learnCount: number;
++}) {
++  return (
++    <header
++      data-testid="study-mobile-title-stack"
++      className="mb-4 flex min-h-14 flex-col items-center justify-center px-2 pt-1 text-center lg:hidden"
++    >
++      <div className="max-w-full truncate text-sm font-semibold text-foreground">
++        {title}
++      </div>
++      <ReviewStateSummary
++        items={[
++          { label: "New", value: newCount, tone: "new" },
++          { label: "Learn", value: learnCount, tone: "learn" },
++        ]}
++        className="mt-1 justify-center gap-x-2 gap-y-1"
++        itemClassName="rounded-full border border-border bg-background px-2 py-1 text-[11px] shadow-[0_1px_0_rgb(15_23_42_/_0.04)]"
++      />
++    </header>
++  );
++}
++
+ type DeletedStudyCardsUndoSnapshot = {
+   deletedIds: string[];
+   previousStudyCards: Card[];
+@@ -542,6 +592,7 @@ export function StudyDeckOverlay({
+   timeMetadataEnabled?: boolean;
+ }) {
+   const cramMode = studyMode === "cram";
++  const deckMobileViewport = useDeckMobileViewport();
+   const effectiveSchedulerSettings = React.useMemo(
+     () => normalizeBinaryStudyScheduleSettings(schedulerSettings),
+     [schedulerSettings],
+@@ -1712,70 +1763,89 @@ export function StudyDeckOverlay({
+           <div
+             className={cn(
+               "grid min-h-0 overflow-hidden",
+-              referenceOpen
+-                ? "grid-rows-[minmax(0,1fr)_minmax(190px,44%)] sm:grid-cols-2 sm:grid-rows-1"
+-                : "grid-cols-1",
++              deckMobileViewport
++                ? "grid-rows-[auto_minmax(0,1fr)]"
++                : "grid-rows-[minmax(0,1fr)]",
+             )}
+           >
+-            <div className="min-h-0 overflow-hidden">
+-              {sessionReady && currentCardLoaded ? (
+-                <StudyStage
+-                  cardId={current?.id ?? null}
+-                  queueLength={stageQueueLength}
+-                  done={done}
+-                  flipped={session.flipped}
+-                  answerFeedback={answerFeedback}
+-                  interactionDisabled={Boolean(answerFeedback)}
+-                  focusRestoreKey={stageFocusRestoreKey}
+-                  questionHtml={questionHtml}
+-                  answerHtml={answerHtml}
+-                  contentScale={referenceOpen ? 0.92 : 1}
+-                  emptyTitle={
+-                    waitingForDelayedRepeat && delayedRepeatWait
+-                      ? `Next Again card in ${delayedRepeatWait}.`
+-                      : undefined
+-                  }
+-                  emptyBody={
+-                    waitingForDelayedRepeat
+-                      ? "Keep this cram session open or come back when the interval is up."
+-                      : undefined
+-                  }
+-                  onMarkWrong={() => markCurrent("wrong")}
+-                  onMarkRight={() => markCurrent("right")}
+-                  onFlip={() => {
+-                    if (answerFeedback || !currentCardLoaded) return;
+-                    setSession((s) => flipCard(s));
+-                  }}
+-                  onBack={handleClose}
+-                />
+-              ) : (
+-                <div className="grid h-full min-h-0 place-items-center px-4">
+-                  <div className="text-sm text-muted-foreground">
+-                    {sessionReady ? "Loading card…" : "Loading study session…"}
+-                  </div>
+-                </div>
+-              )}
+-            </div>
+-
+-            {referenceOpen ? (
+-              <StudyReferencePane
+-                cards={studyCards}
+-                currentCardId={current?.id ?? null}
+-                previewCardId={referencePreviewCardId}
+-                hydrating={referenceHydrating}
+-                editor={editingPlacement === "reference" ? cardEditor : null}
+-                onPreviewCard={requestReferencePreview}
+-                onBackToList={() => setReferencePreviewCardId(null)}
+-                onEditCard={requestReferenceEdit}
++            {deckMobileViewport ? (
++              <StudyMobileTitleStack
++                title={title}
++                newCount={effectiveReviewCounts.newCount}
++                learnCount={effectiveReviewCounts.learnCount}
+               />
+             ) : null}
++
++            <div
++              className={cn(
++                "grid min-h-0 overflow-hidden",
++                referenceOpen
++                  ? "grid-rows-[minmax(0,1fr)_minmax(190px,44%)] sm:grid-cols-2 sm:grid-rows-1"
++                  : "grid-cols-1",
++              )}
++            >
++              <div className="min-h-0 overflow-hidden">
++                {sessionReady && currentCardLoaded ? (
++                  <StudyStage
++                    cardId={current?.id ?? null}
++                    queueLength={stageQueueLength}
++                    done={done}
++                    flipped={session.flipped}
++                    answerFeedback={answerFeedback}
++                    interactionDisabled={Boolean(answerFeedback)}
++                    focusRestoreKey={stageFocusRestoreKey}
++                    questionHtml={questionHtml}
++                    answerHtml={answerHtml}
++                    contentScale={referenceOpen ? 0.92 : 1}
++                    emptyTitle={
++                      waitingForDelayedRepeat && delayedRepeatWait
++                        ? `Next Again card in ${delayedRepeatWait}.`
++                        : undefined
++                    }
++                    emptyBody={
++                      waitingForDelayedRepeat
++                        ? "Keep this cram session open or come back when the interval is up."
++                        : undefined
++                    }
++                    onMarkWrong={() => markCurrent("wrong")}
++                    onMarkRight={() => markCurrent("right")}
++                    onFlip={() => {
++                      if (answerFeedback || !currentCardLoaded) return;
++                      setSession((s) => flipCard(s));
++                    }}
++                    onBack={handleClose}
++                  />
++                ) : (
++                  <div className="grid h-full min-h-0 place-items-center px-4">
++                    <div className="text-sm text-muted-foreground">
++                      {sessionReady ? "Loading card…" : "Loading study session…"}
++                    </div>
++                  </div>
++                )}
+               </div>
+ 
++              {referenceOpen ? (
++                <StudyReferencePane
++                  cards={studyCards}
++                  currentCardId={current?.id ?? null}
++                  previewCardId={referencePreviewCardId}
++                  hydrating={referenceHydrating}
++                  editor={editingPlacement === "reference" ? cardEditor : null}
++                  onPreviewCard={requestReferencePreview}
++                  onBackToList={() => setReferencePreviewCardId(null)}
++                  onEditCard={requestReferenceEdit}
++                />
++              ) : null}
++            </div>
++          </div>
++
+           <StudyControls
+             mode="deck"
+             flipped={session.flipped}
+             disabled={controlsDisabled}
+             locked={Boolean(answerFeedback)}
++            hideAnswerActions={deckMobileViewport}
++            showReviewSummary={!deckMobileViewport}
+             learningCount={effectiveReviewCounts.learnCount}
+             unseenCount={effectiveReviewCounts.newCount}
+             dueCount={effectiveReviewCounts.dueCount}

@@ -1,0 +1,64 @@
+• Waited for background terminal
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• The production build passed. I’m doing the final status/diff check now so the handoff accurately separates merged worker files from the pre-existing local edits that were already in this checkout.
+
+• Ran git status --short
+  └  M docs/codex-remaining-work.md
+     M frontend-react/src/features/decks/components/MainAppRoute.test.tsx
+    … +10 lines (ctrl + t to view transcript)
+    ?? frontend-react/src/features/decks/lib/useDeckDataQueries.ts
+    ?? frontend-react/src/features/decks/lib/useDeckRouteState.ts
+
+• Ran git diff --check
+  └ (no output)
+
+• Ran git diff --name-only
+  └ docs/codex-remaining-work.md
+    frontend-react/src/features/decks/components/MainAppRoute.test.tsx
+    … +7 lines (ctrl + t to view transcript)
+    frontend-react/src/lib/server/simplecardsStoreMappers.ts
+    frontend-react/src/lib/server/simplecardsStoreRows.ts
+
+• Ran git diff --stat
+  └  docs/codex-remaining-work.md                       |   7 +-
+     .../decks/components/MainAppRoute.test.tsx         |  45 ++
+    … +8 lines (ctrl + t to view transcript)
+     .../src/lib/server/simplecardsStoreRows.ts         |   6 +-
+     11 files changed, 495 insertions(+), 665 deletions(-)
+
+• Explored
+  └ Search \b(TagRow|TagCountRpcRow|CardTagLinkRow|toTag|buildCardTagPayload|listTagRows|listTagRowsByIds|listCardTagLinkRows|refreshCardsTagMetadata|rebuildCardsTagMetadata|syncCardTagLinks|applyTagsToCardsFallback|applyCardTags|
+           buildNodeIdsByTagId)\b in server
+
+• Ran wc -l frontend-react/src/features/decks/lib/useDeckCacheController.ts frontend-react/src/features/decks/lib/useDeckDataQueries.ts frontend-react/src/features/decks/lib/useDeckRouteState.ts
+  └      173 frontend-react/src/features/decks/lib/useDeckCacheController.ts
+         356 frontend-react/src/features/decks/lib/useDeckDataQueries.ts
+         258 frontend-react/src/features/decks/lib/useDeckRouteState.ts
+         787 total
+
+• Explored
+  └ List workers
+    Read git-status.txt, last_message.md
+
+• Ran wc -c .codex-fleet/runs/20260429-172823-4179/workers/20260429-173259--did-we-apply-these-high-mainapproute-is-doing-too-mu--440072/diff.patch
+  └        0 .codex-fleet/runs/20260429-172823-4179/workers/20260429-173259--did-we-apply-these-high-mainapproute-is-doing-too-mu--440072/diff.patch
+
+• Explored
+  └ Read MEMORY.md
+
+─ Worked for 1m 10s ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• Merged both successful worker changes into the main checkout. I did not commit and did not edit .codex-fleet.
+
+  Merged Changes
+
+  - Split MainAppRoute responsibilities into useDeckRouteState, useDeckDataQueries, and useDeckCacheController.
+  - Preserved the existing local saved-study-session count work already present in MainAppRoute.
+  - Renamed private server-store helpers/types from tag-first to deck-first terminology while keeping legacy DB/RPC wire names intact.
+Token usage: total=126,203 input=116,536 (+ 1,607,936 cached) output=9,667 (reasoning 3,805)
+To continue this session, run codex resume 019ddb41-2dd9-7b53-b307-dcdbe032eb20
+
+
+

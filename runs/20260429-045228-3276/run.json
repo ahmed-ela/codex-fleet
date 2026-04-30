@@ -1,0 +1,26 @@
+{
+  "base_ref": "HEAD",
+  "base_sha": "296eafd2aa1d7d4de63c188bff6499d7516bd6a3",
+  "branch": "DETACHED",
+  "cleanup": {
+    "worktrees_removed": 0
+  },
+  "completed_at": "2026-04-29T04:52:56-04:00",
+  "concurrency": 3,
+  "headful": {
+    "auto_reconcile_delay": 5.0,
+    "controller_pane": "%0",
+    "input_finished": false,
+    "session": "codex-fleet-20260429-045227-4288"
+  },
+  "jobs": {},
+  "mode": "headful-tmux",
+  "model": "gpt-5.5",
+  "phase": "canceled",
+  "reasoning_effort": "xhigh",
+  "reconciler": null,
+  "repo_root": "/Users/ahmedelamin/repos/projects/simplecards",
+  "run_id": "20260429-045228-3276",
+  "started_at": "2026-04-29T04:52:28-04:00",
+  "workers": {}
+}

@@ -1,0 +1,3 @@
+ M frontend-react/src/features/decks/components/DeckDesktopMenu.tsx
+ M frontend-react/src/features/decks/components/DeckResponsiveChrome.test.tsx
+ M frontend-react/src/features/decks/components/DeckResponsiveChrome.tsx

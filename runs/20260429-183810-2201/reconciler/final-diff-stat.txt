@@ -1,0 +1,24 @@
+ frontend-react/src/app.css                         | 13 +++++
+ .../decks/components/DeckBrowserTable.test.tsx     | 25 ++++++++-
+ .../features/decks/components/DeckBrowserTable.tsx | 23 ++++++---
+ .../features/decks/components/DeckDesktopMenu.tsx  |  4 +-
+ .../features/decks/components/DeckDesktopShell.tsx | 12 +++++
+ .../decks/components/DeckResponsiveChrome.test.tsx |  1 +
+ .../decks/components/DeckResponsiveChrome.tsx      | 11 +++-
+ .../decks/components/MainAppRoute.test.tsx         | 60 ++++++++++++++++++++--
+ .../src/features/decks/components/MainAppRoute.tsx | 19 ++++---
+ .../src/features/decks/lib/deckBrowser.test.ts     |  5 ++
+ .../src/features/decks/lib/deckBrowser.ts          |  4 ++
+ .../study/components/StudyControls.test.tsx        |  6 ++-
+ .../features/study/components/StudyControls.tsx    |  3 ++
+ .../study/components/StudyDeckOverlay.test.tsx     |  3 ++
+ .../features/study/components/StudyDeckOverlay.tsx |  6 +++
+ .../StudySchedulerSettingsPanel.test.tsx           |  7 +--
+ .../components/StudySchedulerSettingsPanel.tsx     | 22 ++++----
+ .../src/features/study/lib/reviewScheduler.test.ts |  4 ++
+ .../src/features/study/lib/reviewScheduler.ts      | 13 +++--
+ .../src/features/study/lib/studySession.test.ts    | 17 ++++++
+ .../src/features/study/lib/studySession.ts         |  6 ++-
+ .../src/shared/ui/review-state-summary.test.tsx    |  6 ++-
+ .../src/shared/ui/review-state-summary.tsx         |  3 +-
+ 23 files changed, 233 insertions(+), 40 deletions(-)

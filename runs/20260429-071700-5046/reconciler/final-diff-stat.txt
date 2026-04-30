@@ -1,0 +1,5 @@
+ .../decks/components/DeckDesktopMenu.test.tsx      |  30 +++++-
+ .../features/decks/components/DeckDesktopMenu.tsx  |   2 +-
+ .../decks/components/MainAppRoute.test.tsx         | 108 +++++++++++++--------
+ .../src/features/decks/components/MainAppRoute.tsx | 103 +++++++++-----------
+ 4 files changed, 143 insertions(+), 100 deletions(-)

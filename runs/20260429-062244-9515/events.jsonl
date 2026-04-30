@@ -1,0 +1,2 @@
+{"base_ref": "a9621027d8dea81e18a2d28c2a1755dff7811d17", "base_sha": "a9621027d8dea81e18a2d28c2a1755dff7811d17", "base_source": "jj_working_copy", "event": "headful_run_created", "jj_change_id": "lmlqpntvoout", "jj_commit_id": "a9621027d8dea81e18a2d28c2a1755dff7811d17", "jj_description": "", "jj_snapshot_at": "2026-04-29T06:22:44-04:00", "run_id": "20260429-062244-9515", "ts": "2026-04-29T06:22:44-04:00", "vcs": "jj"}
+{"event": "headful_canceled", "reason": "frontend_cancel", "ts": "2026-04-29T06:22:56-04:00", "worktrees_removed": 0}

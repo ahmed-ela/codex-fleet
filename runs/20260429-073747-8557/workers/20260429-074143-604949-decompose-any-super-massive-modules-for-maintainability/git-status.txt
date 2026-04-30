@@ -1,0 +1,5 @@
+ M frontend-react/src/lib/server/simplecardsStore.ts
+?? frontend-react/src/lib/server/simplecardsStoreDeckRollups.ts
+?? frontend-react/src/lib/server/simplecardsStoreMappers.ts
+?? frontend-react/src/lib/server/simplecardsStorePreviews.ts
+?? frontend-react/src/lib/server/simplecardsStoreRows.ts

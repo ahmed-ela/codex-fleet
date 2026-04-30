@@ -1,0 +1,79 @@
+# Headful Codex reconciler screen capture
+
+The reconciler ran in the interactive Codex TUI. The final visible pane capture is below.
+
+```text
+
+• Ran git diff -- frontend-react/src/features/decks/components/MainAppRoute.tsx frontend-react/src/features/decks/
+  │ components/MainAppRoute.test.tsx
+  └ diff --git a/frontend-react/src/features/decks/components/MainAppRoute.test.tsx b/frontend-react/src/features/decks/
+    components/MainAppRoute.test.tsx
+    … +432 lines (ctrl + t to view transcript)
+    border-border bg-background px-3 py-2 text-xs font-semibold text-muted-foreground lg:hidden">
+                 <span>Total time</span>
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• There are still broader dirty deck files in the checkout that predated this reconciliation. To catch obvious integration
+  breakage around those nearby surfaces, I’m running the changed deck component test files together.
+
+• Waited for background terminal · bun run test src/features/decks/components/MainAppRoute.test.tsx src/features/decks/
+components/DeckBrowserTable.test.tsx src/features/decks/components/DeckDesktopMenu.test.tsx
+
+• Ran bun run test src/features/decks/components/MainAppRoute.test.tsx src/features/decks/components/
+  │ DeckBrowserTable.test.tsx src/features/decks/components/DeckDesktopMenu.test.tsx
+  └
+     RUN  v4.1.4 /Users/ahmedelamin/repos/projects/simplecards/frontend-react
+    … +5 lines (ctrl + t to view transcript)
+       Duration  8.24s (transform 379ms, setup 189ms, import 512ms, tests 7.88s, environment 583ms)
+
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• The three nearby component test files all pass. I’m running the frontend lint pass once because the surrounding local
+  changes removed several actions/import paths, and lint is the quickest way to catch unused code or obvious TSX issues
+  before I hand this back.
+
+• Ran bun run lint
+  └ (no output)
+
+• Waited for background terminal
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• Lint passed cleanly. I’m doing one final whitespace/status check now, then I’ll summarize the merged worker intents and
+  the remaining local state.
+
+• Ran git diff --check
+  └ (no output)
+
+• Ran git status --short
+  └  M frontend-react/src/app.css
+     M frontend-react/src/features/decks/components/DeckBrowserTable.test.tsx
+    … +5 lines (ctrl + t to view transcript)
+     M frontend-react/src/features/decks/components/MainAppRoute.tsx
+     M frontend-react/src/features/decks/types.ts
+
+• Ran git diff --stat
+  └  frontend-react/src/app.css                         |  21 ++-
+     .../decks/components/DeckBrowserTable.test.tsx     |   4 +-
+    … +6 lines (ctrl + t to view transcript)
+     frontend-react/src/features/decks/types.ts         |   6 +-
+     9 files changed, 221 insertions(+), 214 deletions(-)
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• Merged the successful UI worker patch into the main checkout. Mobile selected-deck card view now shows only New and Learn
+  review count pills at the top, omitting Due, with a regression test covering that behavior.
+
+  Files Changed
+
+  - frontend-react/src/features/decks/components/MainAppRoute.tsx
+  - frontend-react/src/features/decks/components/MainAppRoute.test.tsx
+Token usage: total=87,933 input=82,563 (+ 456,064 cached) output=5,370 (reasoning 2,680)
+To continue this session, run codex resume 019dd8ed-e706-72e1-92f7-e04e7281cb71
+
+
+
+
+```

@@ -1,0 +1,26 @@
+diff --git a/frontend-react/src/features/decks/components/DeckDesktopMenu.test.tsx b/frontend-react/src/features/decks/components/DeckDesktopMenu.test.tsx
+index 2842dcf..9c3b2e8 100644
+--- a/frontend-react/src/features/decks/components/DeckDesktopMenu.test.tsx
++++ b/frontend-react/src/features/decks/components/DeckDesktopMenu.test.tsx
+@@ -61,6 +61,8 @@ describe("DeckDesktopMenu", () => {
+     const navigationButton = screen.getByRole("button", { name: "Decks" });
+     const icon = navigationButton.querySelector("svg");
+     expect(icon).not.toBeNull();
++    expect(icon).toHaveClass("size-[1.875rem]", "lg:size-6");
++    expect(navigationButton).toHaveClass("h-10", "px-3", "lg:h-8", "lg:px-2.5");
+     expect(navigationButton).toHaveTextContent("Decks");
+   });
+ 
+diff --git a/frontend-react/src/features/decks/components/DeckDesktopMenu.tsx b/frontend-react/src/features/decks/components/DeckDesktopMenu.tsx
+index 70df74a..7f40f6c 100644
+--- a/frontend-react/src/features/decks/components/DeckDesktopMenu.tsx
++++ b/frontend-react/src/features/decks/components/DeckDesktopMenu.tsx
+@@ -97,7 +97,7 @@ export function DeckDesktopMenu({ model }: { model: DeckScreenHeaderModel }) {
+       onClick={onNavigation}
+       aria-label={navigationText}
+     >
+-      <NocardsLogoMark className="h-5 w-5 shrink-0 lg:h-4 lg:w-4" />
++      <NocardsLogoMark className="size-[1.875rem] shrink-0 lg:size-6" />
+       <span>{navigationText}</span>
+     </Button>
+   ) : null;

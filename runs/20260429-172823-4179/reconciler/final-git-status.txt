@@ -1,0 +1,14 @@
+ M docs/codex-remaining-work.md
+ M frontend-react/src/features/decks/components/MainAppRoute.test.tsx
+ M frontend-react/src/features/decks/components/MainAppRoute.tsx
+ M frontend-react/src/features/decks/lib/deckBrowser.test.ts
+ M frontend-react/src/features/study/lib/reviewScheduler.test.ts
+ M frontend-react/src/features/study/lib/studySessionStore.test.ts
+ M frontend-react/src/features/study/lib/studySessionStore.ts
+ M frontend-react/src/lib/server/simplecardsStore.ts
+ M frontend-react/src/lib/server/simplecardsStoreDeckRollups.ts
+ M frontend-react/src/lib/server/simplecardsStoreMappers.ts
+ M frontend-react/src/lib/server/simplecardsStoreRows.ts
+?? frontend-react/src/features/decks/lib/useDeckCacheController.ts
+?? frontend-react/src/features/decks/lib/useDeckDataQueries.ts
+?? frontend-react/src/features/decks/lib/useDeckRouteState.ts

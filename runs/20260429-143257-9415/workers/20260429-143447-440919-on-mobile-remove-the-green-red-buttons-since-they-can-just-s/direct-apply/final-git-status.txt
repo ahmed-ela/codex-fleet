@@ -1,0 +1,15 @@
+ M frontend-react/src/features/decks/components/DeckDesktopMenu.test.tsx
+ M frontend-react/src/features/decks/components/DeckDesktopMenu.tsx
+ M frontend-react/src/features/decks/components/DeckResponsiveChrome.test.tsx
+ M frontend-react/src/features/decks/components/DeckResponsiveChrome.tsx
+ M frontend-react/src/features/decks/components/MainAppRoute.test.tsx
+ M frontend-react/src/features/decks/components/MainAppRoute.tsx
+M  frontend-react/src/features/study/components/StudyControls.test.tsx
+M  frontend-react/src/features/study/components/StudyControls.tsx
+M  frontend-react/src/features/study/components/StudyDeckOverlay.test.tsx
+M  frontend-react/src/features/study/components/StudyDeckOverlay.tsx
+ M frontend-react/src/lib/server/simplecardsStore.ts
+ A frontend-react/src/lib/server/simplecardsStoreDeckRollups.ts
+ A frontend-react/src/lib/server/simplecardsStoreMappers.ts
+ A frontend-react/src/lib/server/simplecardsStorePreviews.ts
+ A frontend-react/src/lib/server/simplecardsStoreRows.ts

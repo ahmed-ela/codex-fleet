@@ -1,0 +1,288 @@
+diff --git a/frontend-react/src/features/decks/components/MainAppRoute.test.tsx b/frontend-react/src/features/decks/components/MainAppRoute.test.tsx
+index f945553..72010b1 100644
+--- a/frontend-react/src/features/decks/components/MainAppRoute.test.tsx
++++ b/frontend-react/src/features/decks/components/MainAppRoute.test.tsx
+@@ -746,6 +746,48 @@ describe('MainAppRoute', () => {
+     expectNoVisibleCountLabel('Due 1')
+   })
+ 
++  it('uses saved cram session counts in deck browser rows and the selected deck header', async () => {
++    const cards = Array.from({ length: 19 }, (_, index) => {
++      const cardNumber = index + 1
++      return buildCard(
++        `card-${cardNumber}`,
++        ['tag-bio'],
++        ['Biology'],
++        `Biology ${cardNumber}`,
++        `2026-04-14T00:00:${String(cardNumber).padStart(2, '0')}.000Z`,
++      )
++    })
++    seedStore(cards)
++    await saveStudySession('cram:tag-bio', {
++      id: 'saved-cram-session',
++      startedAt: '2026-04-14T00:00:00.000Z',
++      queueIds: cards.map((card) => card.id),
++      index: 7,
++      flipped: false,
++      delayedRepeats: cards.slice(0, 6).map((card) => ({
++        cardId: card.id,
++        dueAt: '2999-04-14T00:10:00.000Z',
++      })),
++    })
++
++    const deckRoute = renderDecksRoute()
++
++    const biologyRow = await screen.findByRole('button', { name: 'Biology' })
++    await waitFor(() => {
++      expectDeckBrowserStat(biologyRow, 'New', 12)
++      expectDeckBrowserStat(biologyRow, 'Learn', 6)
++    })
++
++    deckRoute.unmount()
++    renderCardsRoute()
++    await waitForPreviewCards(19)
++
++    expectVisibleCountLabel('New 12')
++    expectVisibleCountLabel('Learn 6')
++    expectNoVisibleCountLabel('New 19')
++    expectNoVisibleCountLabel('Learn 0')
++  })
++
+   it('shows only New and Learn counts at the top of the mobile selected deck view', async () => {
+     Object.defineProperty(window, 'matchMedia', {
+       writable: true,
+diff --git a/frontend-react/src/features/decks/components/MainAppRoute.tsx b/frontend-react/src/features/decks/components/MainAppRoute.tsx
+index 7cd2f59..3cac457 100644
+--- a/frontend-react/src/features/decks/components/MainAppRoute.tsx
++++ b/frontend-react/src/features/decks/components/MainAppRoute.tsx
+@@ -108,6 +108,7 @@ import {
+   type BinaryStudyScheduleSettings,
+   type CardReviewState,
+   type CardReviewStateSnapshot,
++  type DeckReviewCounts,
+ } from "@/features/study/lib/reviewScheduler";
+ import {
+   getStoredReviewStates,
+@@ -132,6 +133,10 @@ import {
+   formatStudyTimeEstimateRange,
+ } from "@/features/study/lib/studyTimeEstimator";
+ import type { StudyMode } from "@/features/study/lib/studyMode";
++import {
++  readLocalSavedStudySessions,
++  type SavedStudySession,
++} from "@/features/study/lib/studySessionStore";
+ 
+ const CardEditorOverlay = clientOnlyDynamic(
+   () =>
+@@ -349,6 +354,55 @@ function buildSessionKey(selectedDeckIds: string[], studyMode: StudyMode = "revi
+   return studyMode === "cram" ? `cram:${base}` : base;
+ }
+ 
++function countSavedStudySessionRemaining(
++  saved: SavedStudySession | null | undefined,
++  mode: StudyMode,
++  reviewStates: CardReviewStateSnapshot,
++): DeckReviewCounts | null {
++  if (!saved) return null;
++
++  const queueIds = saved.queueIds
++    .map((cardId) => String(cardId ?? "").trim())
++    .filter(Boolean);
++  const delayedRepeatIds = (saved.delayedRepeats ?? [])
++    .map((repeat) => String(repeat?.cardId ?? "").trim())
++    .filter(Boolean);
++  const index = Math.min(
++    queueIds.length,
++    Math.max(0, Math.floor(Number(saved.index) || 0)),
++  );
++
++  if (index >= queueIds.length && delayedRepeatIds.length === 0) return null;
++
++  const seenCardIds = new Set(queueIds.slice(0, index));
++  const countedCardIds = new Set<string>();
++  let newCount = 0;
++  let learnCount = 0;
++  let dueCount = 0;
++
++  for (const cardId of queueIds.slice(index)) {
++    if (countedCardIds.has(cardId)) continue;
++    countedCardIds.add(cardId);
++
++    const state = mode === "review" ? reviewStates[cardId] : null;
++    if (seenCardIds.has(cardId) || state?.bucket === "learn") {
++      learnCount += 1;
++    } else if (state?.bucket === "due") {
++      dueCount += 1;
++    } else {
++      newCount += 1;
++    }
++  }
++
++  for (const cardId of delayedRepeatIds) {
++    if (countedCardIds.has(cardId)) continue;
++    countedCardIds.add(cardId);
++    learnCount += 1;
++  }
++
++  return { newCount, learnCount, dueCount };
++}
++
+ function toStudySeedCard(card: CardActivity): Card {
+   return {
+     id: card.id,
+@@ -642,6 +696,7 @@ export function MainAppRoute({
+   const [deckDropActive, setDeckDropActive] = React.useState(false);
+   const [desktopViewport, setDesktopViewport] = React.useState(false);
+   const [reviewStates, setReviewStates] = React.useState<CardReviewStateSnapshot>({});
++  const [savedStudySessionsVersion, setSavedStudySessionsVersion] = React.useState(0);
+   const [knownReviewCardActivity, setKnownReviewCardActivity] = React.useState<CardActivity[]>([]);
+   const reviewStatesRef = React.useRef<CardReviewStateSnapshot>({});
+   const studyAnswerUndoStateRef = React.useRef(
+@@ -667,6 +722,10 @@ export function MainAppRoute({
+   const selectedDeckSyncQueueRef = React.useRef<Promise<void>>(Promise.resolve());
+   const studyOpen = studyMode !== null;
+ 
++  const refreshSavedStudySessions = React.useCallback(() => {
++    setSavedStudySessionsVersion((version) => version + 1);
++  }, []);
++
+   const updatePendingCreatedCardIds = React.useCallback(
+     (updater: (previous: string[]) => string[]) => {
+       setPendingCreatedCardIds((previous) => {
+@@ -717,6 +776,13 @@ export function MainAppRoute({
+     () => ["study-review-logs", scope] as const,
+     [scope],
+   );
++  const savedStudySessionsByKey = React.useMemo(
++    () => {
++      void savedStudySessionsVersion;
++      return readLocalSavedStudySessions();
++    },
++    [savedStudySessionsVersion],
++  );
+ 
+   const settingsQuery = useQuery({
+     ...settingsQueryOptions(scope),
+@@ -876,6 +942,19 @@ export function MainAppRoute({
+     };
+   }, [syncReviewStates]);
+ 
++  React.useEffect(() => {
++    refreshSavedStudySessions();
++
++    const onStorage = () => refreshSavedStudySessions();
++    const onFocus = () => refreshSavedStudySessions();
++    window.addEventListener("storage", onStorage);
++    window.addEventListener("focus", onFocus);
++    return () => {
++      window.removeEventListener("storage", onStorage);
++      window.removeEventListener("focus", onFocus);
++    };
++  }, [refreshSavedStudySessions]);
++
+   React.useEffect(() => {
+     if (bootstrapDecks.length === 0) return;
+     setOptimisticDecks((previous) =>
+@@ -1219,9 +1298,26 @@ export function MainAppRoute({
+     () => selectedDeckEligibleCards.filter((card) => !hiddenById[card.id]),
+     [hiddenById, selectedDeckEligibleCards],
+   );
++  const displayedStudyCountMode: StudyMode = studyModeVisible ? "review" : "cram";
++  const selectedDeckSavedStudyCounts = React.useMemo(
++    () =>
++      countSavedStudySessionRemaining(
++        savedStudySessionsByKey[buildSessionKey(validSelectedDeckIds, displayedStudyCountMode)],
++        displayedStudyCountMode,
++        reviewStates,
++      ),
++    [
++      displayedStudyCountMode,
++      reviewStates,
++      savedStudySessionsByKey,
++      validSelectedDeckIds,
++    ],
++  );
+   const selectedDeckReviewCounts = React.useMemo(
+-    () => countDeckReviewBuckets(visibleSelectedDeckCards, reviewStates),
+-    [reviewStates, visibleSelectedDeckCards],
++    () =>
++      selectedDeckSavedStudyCounts ??
++      countDeckReviewBuckets(visibleSelectedDeckCards, reviewStates),
++    [reviewStates, selectedDeckSavedStudyCounts, visibleSelectedDeckCards],
+   );
+   const loadedCards = filteredCards;
+   const hasMoreCards = Boolean(cardsPageQuery.hasNextPage);
+@@ -1256,8 +1352,8 @@ export function MainAppRoute({
+     [allDeckReviewActivity, hiddenById],
+   );
+   const deckBrowserRows = React.useMemo(
+-    () =>
+-      buildDeckBrowserRows(
++    () => {
++      const rows = buildDeckBrowserRows(
+         decks,
+         deckPathCounts,
+         allDeckEstimateCards,
+@@ -1270,17 +1366,36 @@ export function MainAppRoute({
+               schedulerSettings,
+             }
+           : undefined,
+-      ),
++      );
++
++      return rows.map((row) => {
++        const savedCounts = countSavedStudySessionRemaining(
++          savedStudySessionsByKey[buildSessionKey(row.descendantDeckIds, displayedStudyCountMode)],
++          displayedStudyCountMode,
++          reviewStates,
++        );
++        return savedCounts
++          ? {
++              ...row,
++              newCount: savedCounts.newCount,
++              learnCount: savedCounts.learnCount,
++              dueCount: savedCounts.dueCount,
++            }
++          : row;
++      });
++    },
+     [
+       allDeckEstimateCards,
+       deckPathCounts,
+       deckPathTimes,
++      decks,
++      displayedStudyCountMode,
+       reviewStates,
++      savedStudySessionsByKey,
+       schedulerSettings,
+       studyEstimateProfile,
+       studyReviewLogs,
+       studyTimeSurfacesVisible,
+-      decks,
+     ],
+   );
+   const deckBrowserLoadFailed =
+@@ -3440,6 +3555,7 @@ export function MainAppRoute({
+           onClose={() => {
+             setActiveStudySession(null);
+             setStudyMode(null);
++            window.setTimeout(refreshSavedStudySessions, 0);
+           }}
+         />
+       ) : null}
+diff --git a/frontend-react/src/features/study/lib/studySessionStore.ts b/frontend-react/src/features/study/lib/studySessionStore.ts
+index eeeae51..c903afb 100644
+--- a/frontend-react/src/features/study/lib/studySessionStore.ts
++++ b/frontend-react/src/features/study/lib/studySessionStore.ts
+@@ -83,6 +83,11 @@ export async function getSavedStudySession(sessionKey: string): Promise<SavedStu
+   return file.bySessionKey[sessionKey] ?? null
+ }
+ 
++export function readLocalSavedStudySessions(): Record<string, SavedStudySession> {
++  if (typeof localStorage === 'undefined') return {}
++  return { ...load(LOCAL_SESSIONS_KEY).bySessionKey }
++}
++
+ export async function saveStudySession(sessionKey: string, session: SerializedStudySession): Promise<SavedStudySession> {
+   const auth = await getCloudAuthContext()
+   if (auth.useCloud) {

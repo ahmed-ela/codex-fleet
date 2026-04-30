@@ -1,0 +1,75 @@
+diff --git a/frontend-react/src/features/decks/components/MainAppRoute.test.tsx b/frontend-react/src/features/decks/components/MainAppRoute.test.tsx
+index c7600ad..f509530 100644
+--- a/frontend-react/src/features/decks/components/MainAppRoute.test.tsx
++++ b/frontend-react/src/features/decks/components/MainAppRoute.test.tsx
+@@ -678,6 +678,48 @@ describe('MainAppRoute', () => {
+     expect(screen.getByText((_content, node) => node?.textContent === 'Due 1')).toBeInTheDocument()
+   })
+ 
++  it('shows only New and Learn counts at the top of the mobile selected deck view', async () => {
++    Object.defineProperty(window, 'matchMedia', {
++      writable: true,
++      value: vi.fn().mockImplementation(() => ({
++        matches: false,
++        media: '',
++        onchange: null,
++        addListener: vi.fn(),
++        removeListener: vi.fn(),
++        addEventListener: vi.fn(),
++        removeEventListener: vi.fn(),
++        dispatchEvent: vi.fn(),
++      })),
++    })
++    seedStore([
++      buildCard('card-new', ['tag-bio'], ['Biology'], 'New card', '2026-04-14T00:00:01.000Z'),
++      buildCard('card-learn', ['tag-bio'], ['Biology'], 'Learn card', '2026-04-14T00:00:02.000Z'),
++      buildCard('card-due', ['tag-bio'], ['Biology'], 'Due card', '2026-04-14T00:00:03.000Z'),
++    ])
++    seedReviewStates({
++      'card-learn': {
++        cardId: 'card-learn',
++        bucket: 'learn',
++        lastReviewedAt: '2026-04-14T00:00:00.000Z',
++        dueAt: '2999-04-14T00:10:00.000Z',
++      },
++      'card-due': {
++        cardId: 'card-due',
++        bucket: 'due',
++        lastReviewedAt: '2026-04-14T00:00:00.000Z',
++        dueAt: '2999-04-14T12:00:00.000Z',
++      },
++    })
++
++    renderCardsRoute()
++    await waitForPreviewCards(3)
++
++    expect(screen.getByText((_content, node) => node?.textContent === 'New 1')).toBeInTheDocument()
++    expect(screen.getByText((_content, node) => node?.textContent === 'Learn 1')).toBeInTheDocument()
++    expect(screen.queryByText((_content, node) => node?.textContent === 'Due 1')).not.toBeInTheDocument()
++  })
++
+   it('updates the in-deck title counts immediately after studying a new card', async () => {
+     process.env.SIMPLECARDS_ENABLE_STUDY_MODE = '1'
+     seedStore([
+diff --git a/frontend-react/src/features/decks/components/MainAppRoute.tsx b/frontend-react/src/features/decks/components/MainAppRoute.tsx
+index 9da4aad..241508b 100644
+--- a/frontend-react/src/features/decks/components/MainAppRoute.tsx
++++ b/frontend-react/src/features/decks/components/MainAppRoute.tsx
+@@ -3111,6 +3111,17 @@ export function MainAppRoute({
+           </div>
+         ) : null}
+ 
++        {hasDeckSelection && !desktopViewport ? (
++          <ReviewStateSummary
++            items={[
++              { label: "New", value: selectedDeckReviewCounts.newCount, tone: "new" },
++              { label: "Learn", value: selectedDeckReviewCounts.learnCount, tone: "learn" },
++            ]}
++            className="mb-3 justify-center gap-x-2 gap-y-1 lg:hidden"
++            itemClassName="rounded-full border border-border bg-background px-2 py-1 text-[11px] shadow-[0_1px_0_rgb(15_23_42_/_0.04)]"
++          />
++        ) : null}
++
+         {hasDeckSelection && studyTimeSurfacesVisible ? (
+           <div className="mb-3 flex flex-wrap items-center justify-between gap-x-3 gap-y-1 rounded-xl border border-border bg-background px-3 py-2 text-xs font-semibold text-muted-foreground lg:hidden">
+             <span>Total time</span>

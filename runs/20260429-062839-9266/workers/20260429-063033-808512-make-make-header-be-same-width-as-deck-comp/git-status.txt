@@ -1,0 +1,2 @@
+ M frontend-react/src/app.css
+ M frontend-react/src/features/decks/components/DeckDesktopShell.tsx

@@ -1,0 +1,164 @@
+diff --git a/frontend-react/workers/app.ts b/frontend-react/workers/app.ts
+index f29d2a4..a034739 100644
+--- a/frontend-react/workers/app.ts
++++ b/frontend-react/workers/app.ts
+@@ -1,6 +1,6 @@
+ import { createRequestHandler } from 'react-router'
+ import { dispatchApiRequest } from '@/app/server/apiRouter'
+-import { withDocumentNoStore } from './responseHeaders'
++import { redirectInsecureRequest, withWorkerResponseHeaders } from './responseHeaders'
+ 
+ declare module 'react-router' {
+   interface AppLoadContext {
+@@ -18,12 +18,15 @@ const requestHandler = createRequestHandler(
+ 
+ export default {
+   async fetch(request, env, ctx) {
++    const redirectResponse = redirectInsecureRequest(request)
++    if (redirectResponse) return redirectResponse
++
+     const apiResponse = await dispatchApiRequest(request)
+-    if (apiResponse) return apiResponse
++    if (apiResponse) return withWorkerResponseHeaders(request, apiResponse)
+ 
+     const response = await requestHandler(request, {
+       cloudflare: { env, ctx },
+     })
+-    return withDocumentNoStore(response)
++    return withWorkerResponseHeaders(request, response)
+   },
+ } satisfies ExportedHandler<CloudflareEnv>
+diff --git a/frontend-react/workers/responseHeaders.test.ts b/frontend-react/workers/responseHeaders.test.ts
+index e66d9e3..f0af253 100644
+--- a/frontend-react/workers/responseHeaders.test.ts
++++ b/frontend-react/workers/responseHeaders.test.ts
+@@ -1,7 +1,33 @@
+ import { describe, expect, it } from 'vitest'
+-import { withDocumentNoStore } from './responseHeaders'
++import {
++  redirectInsecureRequest,
++  withDocumentNoStore,
++  withHttpsSecurityHeaders,
++  withWorkerResponseHeaders,
++} from './responseHeaders'
+ 
+ describe('worker response headers', () => {
++  it('redirects public HTTP requests to the same HTTPS URL', () => {
++    const response = redirectInsecureRequest(
++      new Request('http://nocards.app/api/auth/login/google?next=%2F'),
++    )
++
++    expect(response?.status).toBe(308)
++    expect(response?.headers.get('Location')).toBe(
++      'https://nocards.app/api/auth/login/google?next=%2F',
++    )
++    expect(response?.headers.get('Cache-Control')).toBe('no-store')
++  })
++
++  it('does not redirect localhost HTTP requests', () => {
++    expect(redirectInsecureRequest(new Request('http://localhost:5173/'))).toBeNull()
++    expect(redirectInsecureRequest(new Request('http://127.0.0.1:8788/'))).toBeNull()
++  })
++
++  it('does not redirect HTTPS requests', () => {
++    expect(redirectInsecureRequest(new Request('https://nocards.app/'))).toBeNull()
++  })
++
+   it('marks HTML responses as no-store at the worker boundary', async () => {
+     const response = withDocumentNoStore(
+       new Response('<!doctype html>', {
+@@ -20,4 +46,38 @@ describe('worker response headers', () => {
+ 
+     expect(withDocumentNoStore(response)).toBe(response)
+   })
++
++  it('adds HSTS to HTTPS responses for public hosts', () => {
++    const response = withHttpsSecurityHeaders(
++      new Request('https://nocards.app/api/auth/session'),
++      new Response('{}', { headers: { 'Content-Type': 'application/json' } }),
++    )
++
++    expect(response.headers.get('Strict-Transport-Security')).toBe(
++      'max-age=31536000; includeSubDomains',
++    )
++  })
++
++  it('does not add HSTS on localhost HTTPS requests', () => {
++    const original = new Response('{}')
++
++    expect(withHttpsSecurityHeaders(new Request('https://localhost:8788/'), original)).toBe(
++      original,
++    )
++  })
++
++  it('combines document cache and HTTPS security headers', async () => {
++    const response = withWorkerResponseHeaders(
++      new Request('https://nocards.app/'),
++      new Response('<!doctype html>', {
++        headers: { 'Content-Type': 'text/html; charset=utf-8' },
++      }),
++    )
++
++    expect(response.headers.get('Cache-Control')).toBe('no-store')
++    expect(response.headers.get('Strict-Transport-Security')).toBe(
++      'max-age=31536000; includeSubDomains',
++    )
++    await expect(response.text()).resolves.toBe('<!doctype html>')
++  })
+ })
+diff --git a/frontend-react/workers/responseHeaders.ts b/frontend-react/workers/responseHeaders.ts
+index b340c25..b2367d4 100644
+--- a/frontend-react/workers/responseHeaders.ts
++++ b/frontend-react/workers/responseHeaders.ts
+@@ -1,3 +1,30 @@
++const HTTPS_HSTS_HEADER_VALUE = 'max-age=31536000; includeSubDomains'
++
++function isLocalHostname(hostname: string) {
++  return (
++    hostname === 'localhost' ||
++    hostname === '127.0.0.1' ||
++    hostname === '0.0.0.0' ||
++    hostname === '[::1]' ||
++    hostname.endsWith('.localhost')
++  )
++}
++
++export function redirectInsecureRequest(request: Request) {
++  const url = new URL(request.url)
++  if (url.protocol !== 'http:' || isLocalHostname(url.hostname)) return null
++
++  url.protocol = 'https:'
++  return new Response(null, {
++    status: 308,
++    statusText: 'Permanent Redirect',
++    headers: {
++      Location: url.toString(),
++      'Cache-Control': 'no-store',
++    },
++  })
++}
++
+ export function withDocumentNoStore(response: Response) {
+   const contentType = response.headers.get('Content-Type') ?? ''
+   if (!contentType.toLowerCase().includes('text/html')) return response
+@@ -10,3 +37,20 @@ export function withDocumentNoStore(response: Response) {
+     statusText: response.statusText,
+   })
+ }
++
++export function withHttpsSecurityHeaders(request: Request, response: Response) {
++  const url = new URL(request.url)
++  if (url.protocol !== 'https:' || isLocalHostname(url.hostname)) return response
++
++  const headers = new Headers(response.headers)
++  headers.set('Strict-Transport-Security', HTTPS_HSTS_HEADER_VALUE)
++  return new Response(response.body, {
++    headers,
++    status: response.status,
++    statusText: response.statusText,
++  })
++}
++
++export function withWorkerResponseHeaders(request: Request, response: Response) {
++  return withHttpsSecurityHeaders(request, withDocumentNoStore(response))
++}

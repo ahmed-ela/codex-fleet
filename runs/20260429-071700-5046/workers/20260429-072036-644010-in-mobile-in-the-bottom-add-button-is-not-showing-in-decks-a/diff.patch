@@ -1,0 +1,85 @@
+diff --git a/frontend-react/src/features/decks/components/MainAppRoute.test.tsx b/frontend-react/src/features/decks/components/MainAppRoute.test.tsx
+index f509530..1c95b8b 100644
+--- a/frontend-react/src/features/decks/components/MainAppRoute.test.tsx
++++ b/frontend-react/src/features/decks/components/MainAppRoute.test.tsx
+@@ -510,13 +510,45 @@ describe('MainAppRoute', () => {
+     expect(screen.getByRole('button', { name: 'Chemistry' })).toBeInTheDocument()
+   })
+ 
+-  it('does not show the add-deck action on the deck browser home', async () => {
++  it('does not show the add-deck action on the desktop deck browser home', async () => {
+     renderDecksRoute()
+ 
+     expect(await screen.findByRole('button', { name: 'Biology' })).toBeInTheDocument()
+     expect(screen.queryByRole('button', { name: 'Add deck' })).not.toBeInTheDocument()
+   })
+ 
++  it('shows the mobile deck home add action as a floating Add deck button', async () => {
++    Object.defineProperty(window, 'matchMedia', {
++      writable: true,
++      value: vi.fn().mockImplementation(() => ({
++        matches: false,
++        media: '',
++        onchange: null,
++        addListener: vi.fn(),
++        removeListener: vi.fn(),
++        addEventListener: vi.fn(),
++        removeEventListener: vi.fn(),
++        dispatchEvent: vi.fn(),
++      })),
++    })
++
++    renderDecksRoute()
++
++    expect(await screen.findByRole('button', { name: 'Biology' })).toBeInTheDocument()
++    const mobileDock = screen.getByRole('toolbar', { name: 'Deck actions' })
++    const actionPill = screen.getByTestId('deck-mobile-action-pill')
++    expect(within(actionPill).getByRole('button', { name: 'Settings' })).toBeInTheDocument()
++    expect(within(actionPill).queryByRole('button', { name: 'Add deck' })).not.toBeInTheDocument()
++
++    const addDeckButton = within(mobileDock).getByRole('button', { name: 'Add deck' })
++    expect(addDeckButton).toHaveClass('h-14', 'w-14', 'rounded-full')
++    expect(addDeckButton.querySelector('svg')).not.toBeNull()
++    fireEvent.click(addDeckButton)
++
++    expect(await screen.findByRole('dialog', { name: 'Add deck' })).toBeInTheDocument()
++    expect(screen.getByRole('textbox', { name: 'Deck name' })).toBeInTheDocument()
++  })
++
+   it('lets you switch decks from the deck browser and syncs the cards route', async () => {
+     renderDecksRoute()
+ 
+diff --git a/frontend-react/src/features/decks/components/MainAppRoute.tsx b/frontend-react/src/features/decks/components/MainAppRoute.tsx
+index 241508b..aefa09c 100644
+--- a/frontend-react/src/features/decks/components/MainAppRoute.tsx
++++ b/frontend-react/src/features/decks/components/MainAppRoute.tsx
+@@ -1966,6 +1966,10 @@ export function MainAppRoute({
+     setSettingsOpen(true);
+   }, []);
+ 
++  const handleOpenCreateDeck = React.useCallback(() => {
++    setCreateDeckOpen(true);
++  }, []);
++
+   const openEditCard = React.useCallback(
+     async (cardId: string) => {
+       try {
+@@ -3061,9 +3065,17 @@ export function MainAppRoute({
+           active: settingsOpen,
+           variant: "outline",
+         },
++        {
++          id: "add-deck",
++          label: "Add deck",
++          onClick: handleOpenCreateDeck,
++          icon: Plus,
++          iconOnly: true,
++          variant: "outline",
++        },
+       ],
+     }),
+-    [handleOpenSettings, settingsOpen],
++    [handleOpenCreateDeck, handleOpenSettings, settingsOpen],
+   );
+ 
+   const resetDeckReviewFromRow = React.useCallback(

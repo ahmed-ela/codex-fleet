@@ -1,0 +1,806 @@
+diff --git a/frontend-react/src/features/decks/components/MainAppRoute.tsx b/frontend-react/src/features/decks/components/MainAppRoute.tsx
+index 3cac457..8b69f01 100644
+--- a/frontend-react/src/features/decks/components/MainAppRoute.tsx
++++ b/frontend-react/src/features/decks/components/MainAppRoute.tsx
+@@ -1,7 +1,7 @@
+ "use client";
+ 
+ import * as React from "react";
+-import { useInfiniteQuery, useQuery, useQueryClient, type InfiniteData } from "@tanstack/react-query";
++import { useQuery, useQueryClient, type InfiniteData } from "@tanstack/react-query";
+ import {
+   BookOpen,
+   Command,
+@@ -37,16 +37,9 @@ import {
+   parseAnkiApkgFile,
+   summarizeAnkiImportWarnings,
+ } from "@/lib/ankiApkg";
+-import {
+-  DEFAULT_APP_SETTINGS,
+-} from "@/lib/appSettings";
+ import {
+   buildDecksUrl,
+   buildCardsUrl,
+-  canonicalizeCardsUrl,
+-  parseSelectCardsMode,
+-  parseStudyMode,
+-  parseSelectedDeckIds,
+ } from "@/features/decks/lib/cardsRouteState";
+ import { buildDeckBrowserRows } from "@/features/decks/lib/deckBrowser";
+ import {
+@@ -55,13 +48,22 @@ import {
+   shouldIgnoreSpaceHotkeyTarget,
+ } from "@/features/decks/lib/hotkeys";
+ import { useDeckScreenModel } from "@/features/decks/lib/useDeckScreenModel";
++import {
++  STUDY_REVIEW_LOG_HISTORY_LIMIT,
++  useDeckDataQueries,
++} from "@/features/decks/lib/useDeckDataQueries";
++import { useDeckCacheController } from "@/features/decks/lib/useDeckCacheController";
++import {
++  useDeckRouteState,
++  useDeckRouteSync,
++} from "@/features/decks/lib/useDeckRouteState";
+ import {
+   ensureDeckThumbVariantForPreview,
+   resolveCardImagesFromCache,
+ } from "@/lib/storageImages";
+ import { supabaseConfigured } from "@/features/auth/lib/supabaseClient";
+ import type { DeckScreenDockModel, DeckScreenHeaderModel } from "@/features/decks/types";
+-import type { AppSettings, Card, CardActivity, CardPageItem, CardPageResult, Deck, LibraryBootstrap, StudyReviewLog, StudyTimeEntry, StudyTimeTotals } from "@/lib/types";
++import type { Card, CardActivity, CardPageItem, CardPageResult, Deck, LibraryBootstrap, StudyReviewLog, StudyTimeEntry, StudyTimeTotals } from "@/lib/types";
+ import { dedupeDeckIds, normalizeDeckName, normalizeDeckNameKey } from "@/lib/decks";
+ import { cn } from "@/lib/utils";
+ import { clientOnlyDynamic } from "@/lib/clientOnlyDynamic";
+@@ -78,27 +80,11 @@ import {
+ } from "@/lib/cardSort";
+ import {
+   CARD_BATCH_SIZE,
+-  CARD_LIST_STALE_TIME_MS,
+-  cardActivityByIdsQueryOptions,
+-  cardActivityQueryOptions,
+   cardsKeys,
+-  cardsQueryScope,
+-  deckSelectionKey,
+   chainCardsQueryOptions,
+-  decksQueryOptions,
+   fullCardQueryOptions,
+-  libraryBootstrapQueryOptions,
+-  readPersistedCardPageQueryData,
+-  readPersistedCardPageQueryUpdatedAt,
+-  settingsQueryOptions,
+-  writePersistedCardPageSnapshot,
+ } from "@/lib/cardsQueries";
+ import { createClientId } from "@/lib/clientId";
+-import {
+-  useAppPathname,
+-  useAppRouter,
+-  useAppSearchParams,
+-} from "@/lib/appRouting";
+ import {
+   countDeckReviewBuckets,
+   DEFAULT_TARGET_RETENTION_PERCENT,
+@@ -145,7 +131,6 @@ const CardEditorOverlay = clientOnlyDynamic(
+     ),
+ );
+ 
+-const STUDY_REVIEW_LOG_HISTORY_LIMIT = 5000;
+ const StudyDeckOverlay = clientOnlyDynamic(
+   () =>
+     import("@/features/study/components/StudyDeckOverlay").then(
+@@ -159,14 +144,8 @@ const StudyCardOverlay = clientOnlyDynamic(
+     ),
+ );
+ 
+-const EMPTY_DECKS: Deck[] = [];
+ const EMPTY_CARDS: Card[] = [];
+-const EMPTY_CARD_PAGE_ITEMS: CardPageItem[] = [];
+-const EMPTY_CARD_ACTIVITY: CardActivity[] = [];
+-const EMPTY_STUDY_REVIEW_LOGS: StudyReviewLog[] = [];
+-const EMPTY_DECK_PATH_COUNTS: LibraryBootstrap["deckPathCounts"] = {};
+ const EMPTY_DECK_PATH_TIMES: NonNullable<LibraryBootstrap["deckPathTimes"]> = {};
+-const DEFAULT_SETTINGS: AppSettings = DEFAULT_APP_SETTINGS;
+ const LOAD_MORE_THRESHOLD_PX = 320;
+ 
+ type StudyAnswerUndoMeta = {
+@@ -260,56 +239,6 @@ function toastWithTimeout(setToast: (message: string | null) => void, message: s
+   window.setTimeout(() => setToast(null), 900);
+ }
+ 
+-function deckPathCountKey(deckName: string) {
+-  return normalizeDeckName(deckName)
+-    .split("/")
+-    .map((segment) => normalizeDeckName(segment))
+-    .filter(Boolean)
+-    .join("/")
+-    .toLowerCase();
+-}
+-
+-function schedulePostPaintQueryRefresh(callback: () => void) {
+-  if (typeof window === "undefined") return () => {};
+-
+-  const idleWindow = window as Window & {
+-    requestIdleCallback?: (callback: () => void, options?: { timeout: number }) => number;
+-    cancelIdleCallback?: (id: number) => void;
+-  };
+-  let cancelled = false;
+-  let idleId: number | null = null;
+-  let fallbackTimerId: number | null = null;
+-  const bootTimerId = window.setTimeout(() => {
+-    if (cancelled) return;
+-
+-    if (idleWindow.requestIdleCallback) {
+-      idleId = idleWindow.requestIdleCallback(() => {
+-        if (!cancelled) callback();
+-      }, { timeout: 1500 });
+-      return;
+-    }
+-
+-    fallbackTimerId = window.setTimeout(() => {
+-      if (!cancelled) callback();
+-    }, 0);
+-  }, 750);
+-
+-  return () => {
+-    cancelled = true;
+-    window.clearTimeout(bootTimerId);
+-    if (fallbackTimerId !== null) window.clearTimeout(fallbackTimerId);
+-    if (idleId !== null) idleWindow.cancelIdleCallback?.(idleId);
+-  };
+-}
+-
+-function toHiddenCardsById(cardIds: readonly string[]) {
+-  return cardIds.reduce<Record<string, true>>((out, cardId) => {
+-    const trimmed = String(cardId ?? "").trim();
+-    if (trimmed) out[trimmed] = true;
+-    return out;
+-  }, {});
+-}
+-
+ function ShortcutKeyCaps({
+   keys,
+ }: {
+@@ -605,27 +534,6 @@ function removeId(ids: string[], id: string) {
+   return ids.filter((candidate) => candidate !== id);
+ }
+ 
+-function upsertDeckList(decks: Deck[], deck: Deck) {
+-  const deckNameKey = normalizeDeckNameKey(deck.name);
+-  const withoutDeck = decks.filter(
+-    (candidate) =>
+-      candidate.id !== deck.id &&
+-      normalizeDeckNameKey(candidate.name) !== deckNameKey,
+-  );
+-  return [...withoutDeck, deck];
+-}
+-
+-function replaceDeckInList(decks: Deck[], previousDeckId: string, deck: Deck) {
+-  const deckNameKey = normalizeDeckNameKey(deck.name);
+-  const withoutDeck = decks.filter(
+-    (candidate) =>
+-      candidate.id !== previousDeckId &&
+-      candidate.id !== deck.id &&
+-      normalizeDeckNameKey(candidate.name) !== deckNameKey,
+-  );
+-  return [...withoutDeck, deck];
+-}
+-
+ export function MainAppRoute({
+   routeMode,
+   routeDeckId,
+@@ -636,20 +544,29 @@ export function MainAppRoute({
+   imageOcclusionEnabled: boolean;
+ }) {
+   const { session, signInGoogle, signOut } = useAuth();
+-  const router = useAppRouter();
+-  const pathname = useAppPathname();
+-  const searchParams = useAppSearchParams();
+   const queryClient = useQueryClient();
+   const ankiImportVisible = ankiPackageImportEnabled();
+   const studyModeVisible = studyModeEnabled();
+   const studyTimeSurfacesVisible = studyTimeSurfacesEnabled();
+   const advancedStudySettingsVisible = advancedStudySettingsEnabled();
+-  const decksRoute = routeMode === "decks";
+-  const cardsRoute = routeMode === "cards";
+-  const initialSelectedDeckIds =
+-    decksRoute
+-      ? []
+-      : parseSelectedDeckIds(routeDeckId, searchParams.get("decks"), searchParams.get("tags"));
++  const deckRouteState = useDeckRouteState({
++    routeMode,
++    routeDeckId,
++    studyModeVisible,
++  });
++  const {
++    router,
++    decksRoute,
++    cardsRoute,
++    selectCardsMode,
++    studyMode,
++    setStudyMode,
++    selectionMode,
++    setSelectionMode,
++    selectedDeckIds,
++    setSelectedDeckIds,
++    selectionReady,
++  } = deckRouteState;
+ 
+   const [toast, setToast] = React.useState<string | null>(null);
+   const [editorCard, setEditorCard] = React.useState<Card | null>(null);
+@@ -657,15 +574,7 @@ export function MainAppRoute({
+   const [editorLaunchMode, setEditorLaunchMode] = React.useState<"text" | "occlusion">("text");
+   const [editorInitialMediaFile, setEditorInitialMediaFile] = React.useState<File | null>(null);
+   const [previewCardId, setPreviewCardId] = React.useState<string | null>(null);
+-  const [studyMode, setStudyMode] = React.useState<StudyMode | null>(() => {
+-    const requestedMode = parseStudyMode(searchParams.get("study"));
+-    return !studyModeVisible && requestedMode === "review" ? null : requestedMode;
+-  });
+-  const selectCardsMode = cardsRoute && parseSelectCardsMode(searchParams.get("select"));
+-  const [selectionMode, setSelectionMode] = React.useState(selectCardsMode);
+   const [selectedCardIds, setSelectedCardIds] = React.useState<string[]>([]);
+-  const [selectedDeckIds, setSelectedDeckIds] = React.useState<string[]>(() => initialSelectedDeckIds);
+-  const [selectionReady, setSelectionReady] = React.useState(false);
+   const [settingsOpen, setSettingsOpen] = React.useState(false);
+   const [savingStudySchedule, setSavingStudySchedule] = React.useState(false);
+   const [shortcutsOpen, setShortcutsOpen] = React.useState(false);
+@@ -717,9 +626,6 @@ export function MainAppRoute({
+   const [deletingSelectedCards, setDeletingSelectedCards] = React.useState(false);
+   const ankiImportInputRef = React.useRef<HTMLInputElement | null>(null);
+   const cardsScrollRegionRef = React.useRef<HTMLDivElement | null>(null);
+-  const restoredSelectionRef = React.useRef(false);
+-  const selectedDeckSyncVersionRef = React.useRef(0);
+-  const selectedDeckSyncQueueRef = React.useRef<Promise<void>>(Promise.resolve());
+   const studyOpen = studyMode !== null;
+ 
+   const refreshSavedStudySessions = React.useCallback(() => {
+@@ -748,34 +654,8 @@ export function MainAppRoute({
+     [],
+   );
+ 
+-  const incomingRouteSelectedDeckIds = React.useMemo(
+-    () => parseSelectedDeckIds(routeDeckId, searchParams.get("decks"), searchParams.get("tags")),
+-    [routeDeckId, searchParams],
+-  );
+-  const routeSelectedDeckIds = React.useMemo(
+-    () => (decksRoute ? [] : incomingRouteSelectedDeckIds),
+-    [decksRoute, incomingRouteSelectedDeckIds],
+-  );
+-
+   const userId = session?.user?.id ?? null;
+-  const scope = cardsQueryScope(userId);
+   const cardSortMode: CardSortMode = DEFAULT_CARD_SORT_MODE;
+-  const settingsKey = React.useMemo(() => cardsKeys.settings(scope), [scope]);
+-  const selectedDeckQueryIds = React.useMemo(() => dedupeDeckIds(selectedDeckIds), [selectedDeckIds]);
+-  const selectedDeckQueryKey = React.useMemo(
+-    () => deckSelectionKey(selectedDeckQueryIds),
+-    [selectedDeckQueryIds],
+-  );
+-  const deckCatalogKey = React.useMemo(() => cardsKeys.decks(scope), [scope]);
+-  const libraryBootstrapKey = React.useMemo(() => cardsKeys.library(scope), [scope]);
+-  const selectedCardActivityKey = React.useMemo(
+-    () => cardsKeys.activity(scope, selectedDeckQueryKey),
+-    [scope, selectedDeckQueryKey],
+-  );
+-  const studyReviewLogsKey = React.useMemo(
+-    () => ["study-review-logs", scope] as const,
+-    [scope],
+-  );
+   const savedStudySessionsByKey = React.useMemo(
+     () => {
+       void savedStudySessionsVersion;
+@@ -783,68 +663,44 @@ export function MainAppRoute({
+     },
+     [savedStudySessionsVersion],
+   );
+-
+-  const settingsQuery = useQuery({
+-    ...settingsQueryOptions(scope),
+-    enabled: session !== undefined,
+-  });
+-
+-  const libraryBootstrapQuery = useQuery({
+-    ...libraryBootstrapQueryOptions(scope),
+-    enabled: session !== undefined,
+-  });
+-
+-  const deckCatalogQuery = useQuery({
+-    ...decksQueryOptions(scope),
+-    enabled: session !== undefined,
+-  });
+-
+-  const selectedCardActivityQuery = useQuery({
+-    ...cardActivityQueryOptions(scope, selectedDeckQueryIds),
+-    enabled: selectionReady && cardsRoute && libraryBootstrapQuery.isSuccess,
+-  });
+-
+-  const studyReviewLogsQuery = useQuery({
+-    queryKey: studyReviewLogsKey,
+-    queryFn: () => api.getStudyReviewLogs({ limit: STUDY_REVIEW_LOG_HISTORY_LIMIT }),
+-    enabled: session !== undefined,
+-    staleTime: 30_000,
+-  });
+-
+-  const reviewStateCardIds = React.useMemo(
+-    () => Object.keys(reviewStates).filter(Boolean),
+-    [reviewStates],
+-  );
+-  const reviewStateCardActivityQuery = useQuery({
+-    ...cardActivityByIdsQueryOptions(scope, reviewStateCardIds),
+-    enabled: libraryBootstrapQuery.isSuccess && reviewStateCardIds.length > 0,
++  const {
++    scope,
++    settingsKey,
++    selectedDeckQueryIds,
++    deckCatalogKey,
++    libraryBootstrapKey,
++    selectedCardActivityKey,
++    selectedCardsPageKey,
++    studyReviewLogsKey,
++    settingsQuery,
++    libraryBootstrapQuery,
++    deckCatalogQuery,
++    selectedCardActivityQuery,
++    cardsPageQuery,
++    settings,
++    bootstrapDecks,
++    decks,
++    selectedCardActivity,
++    reviewStateCardActivity,
++    studyReviewLogs,
++    hiddenById,
++    deckPathCounts,
++    deckPathTimes,
++    validDeckIdSet,
++    validSelectedDeckIds,
++    selectedDecksKnownEmpty,
++    syncedSelectedDeckIds,
++    filteredCards,
++  } = useDeckDataQueries({
++    userId,
++    sessionReady: session !== undefined,
++    selectionReady,
++    cardsRoute,
++    selectedDeckIds,
++    optimisticDecks,
++    reviewStates,
++    cardSortMode,
+   });
+-
+-  const bootstrapDecks = libraryBootstrapQuery.data?.decks ?? EMPTY_DECKS;
+-  const catalogDecks = deckCatalogQuery.data ?? EMPTY_DECKS;
+-  const decks = React.useMemo(() => {
+-    const merged: Deck[] = [];
+-    const addDeck = (candidate: Deck) => {
+-      if (
+-        merged.some(
+-          (deck) =>
+-            deck.id === candidate.id ||
+-            normalizeDeckNameKey(deck.name) === normalizeDeckNameKey(candidate.name),
+-        )
+-      ) {
+-        return;
+-      }
+-      merged.push(candidate);
+-    };
+-
+-    for (const deck of bootstrapDecks) addDeck(deck);
+-    for (const deck of catalogDecks) addDeck(deck);
+-    for (const optimisticDeck of optimisticDecks) {
+-      addDeck(optimisticDeck);
+-    }
+-    return merged;
+-  }, [bootstrapDecks, catalogDecks, optimisticDecks]);
+-  const settings = settingsQuery.data ?? DEFAULT_SETTINGS;
+   const targetRetentionPercent = settings.targetRetentionPercent ?? DEFAULT_TARGET_RETENTION_PERCENT;
+   const schedulerSettings = React.useMemo<BinaryStudyScheduleSettings>(
+     () => ({
+@@ -860,9 +716,6 @@ export function MainAppRoute({
+       targetRetentionPercent,
+     ],
+   );
+-  const selectedCardActivity = selectedCardActivityQuery.data ?? EMPTY_CARD_ACTIVITY;
+-  const reviewStateCardActivity = reviewStateCardActivityQuery.data ?? EMPTY_CARD_ACTIVITY;
+-  const studyReviewLogs = studyReviewLogsQuery.data ?? EMPTY_STUDY_REVIEW_LOGS;
+   const studyEstimateProfile = React.useMemo(
+     () => buildStudyTimeEstimatorProfile(studyReviewLogs, "study"),
+     [studyReviewLogs],
+@@ -879,15 +732,6 @@ export function MainAppRoute({
+       }),
+     [schedulerSettings, studyReviewLogs],
+   );
+-  const hiddenById = React.useMemo(
+-    () =>
+-      toHiddenCardsById(
+-        libraryBootstrapQuery.data?.hiddenCardIds ?? [],
+-      ),
+-    [libraryBootstrapQuery.data?.hiddenCardIds],
+-  );
+-  const deckPathCounts = libraryBootstrapQuery.data?.deckPathCounts ?? EMPTY_DECK_PATH_COUNTS;
+-  const deckPathTimes = libraryBootstrapQuery.data?.deckPathTimes ?? EMPTY_DECK_PATH_TIMES;
+   const pendingDeckIdSet = React.useMemo(() => new Set(pendingDeckIds), [pendingDeckIds]);
+   const pendingCreatedCardIdSet = React.useMemo(
+     () => new Set(pendingCreatedCardIds),
+@@ -897,32 +741,6 @@ export function MainAppRoute({
+     () => new Set(failedCreatedCardIds),
+     [failedCreatedCardIds],
+   );
+-  const validDeckIdSet = React.useMemo(() => new Set(decks.map((deck) => deck.id)), [decks]);
+-  const deckPathCountKeyById = React.useMemo(
+-    () => new Map(decks.map((deck) => [deck.id, deckPathCountKey(deck.name)] as const)),
+-    [decks],
+-  );
+-  const validSelectedDeckIds = React.useMemo(
+-    () => dedupeDeckIds(selectedDeckIds).filter((deckId) => validDeckIdSet.has(deckId)),
+-    [selectedDeckIds, validDeckIdSet],
+-  );
+-  const selectedDecksKnownEmpty =
+-    cardsRoute &&
+-    selectionReady &&
+-    libraryBootstrapQuery.isSuccess &&
+-    validSelectedDeckIds.length > 0 &&
+-    validSelectedDeckIds.every((deckId) => {
+-      const pathKey = deckPathCountKeyById.get(deckId);
+-      return !pathKey || (deckPathCounts[pathKey] ?? 0) === 0;
+-    });
+-  const syncedSelectedDeckIds = libraryBootstrapQuery.isSuccess
+-    ? validSelectedDeckIds
+-    : selectedDeckQueryIds;
+-  const selectedCardsPageKey = React.useMemo(
+-    () => cardsKeys.page(scope, selectedDeckQueryKey, cardSortMode),
+-    [cardSortMode, scope, selectedDeckQueryKey],
+-  );
+-
+   const syncReviewStates = React.useCallback(() => {
+     const next = getStoredReviewStates(userId);
+     reviewStatesRef.current = next;
+@@ -968,119 +786,19 @@ export function MainAppRoute({
+       ),
+     );
+   }, [bootstrapDecks]);
+-  const cardsPageQuery = useInfiniteQuery({
+-    queryKey: selectedCardsPageKey,
+-    enabled: selectionReady && cardsRoute && libraryBootstrapQuery.isSuccess && !selectedDecksKnownEmpty,
+-    staleTime: CARD_LIST_STALE_TIME_MS,
+-    initialPageParam: 0,
+-    initialData: () =>
+-      selectedDecksKnownEmpty
+-        ? undefined
+-        : readPersistedCardPageQueryData(scope, selectedDeckQueryKey, cardSortMode),
+-    initialDataUpdatedAt: () =>
+-      selectedDecksKnownEmpty
+-        ? undefined
+-        : readPersistedCardPageQueryUpdatedAt(scope, selectedDeckQueryKey, cardSortMode),
+-    queryFn: async ({ pageParam }) => {
+-      const fetchedPage = await api.getCardsPage(selectedDeckQueryIds, {
+-        offset: pageParam,
+-        limit: CARD_BATCH_SIZE,
+-        sort: cardSortMode,
+-      });
+-      if (pageParam === 0) {
+-        const currentPageData = queryClient.getQueryData<InfiniteData<CardPageResult, number>>(
+-          selectedCardsPageKey,
+-        );
+-        const currentItemsById = new Map(
+-          (currentPageData?.pages ?? [])
+-            .flatMap((page) => page.items)
+-            .map((item) => [item.id, item] as const),
+-        );
+-        const page = {
+-          ...fetchedPage,
+-          items: fetchedPage.items.map((item) => {
+-            const currentItem = currentItemsById.get(item.id);
+-            if (!currentItem) return item;
+-            return currentItem.updatedAt >= item.updatedAt ? currentItem : item;
+-          }),
+-        };
+-        writePersistedCardPageSnapshot(scope, selectedDeckQueryKey, cardSortMode, page);
+-        return page;
+-      }
+-      return fetchedPage;
+-    },
+-    getNextPageParam: (lastPage) => lastPage.nextOffset ?? undefined,
+-  });
+-
+-  const shouldRevalidatePersistedDeckSnapshot =
+-    session !== undefined &&
+-    (
+-      (Boolean(deckCatalogQuery.data) && !deckCatalogQuery.isFetchedAfterMount) ||
+-      (Boolean(libraryBootstrapQuery.data) && !libraryBootstrapQuery.isFetchedAfterMount)
+-    );
+-  React.useEffect(() => {
+-    if (!shouldRevalidatePersistedDeckSnapshot) return;
+ 
+-    return schedulePostPaintQueryRefresh(() => {
+-      void queryClient.invalidateQueries({ queryKey: deckCatalogKey, exact: true });
+-      void queryClient.invalidateQueries({ queryKey: libraryBootstrapKey, exact: true });
+-    });
+-  }, [
+-    deckCatalogKey,
+-    libraryBootstrapKey,
++  useDeckRouteSync({
++    routeState: deckRouteState,
+     queryClient,
+-    shouldRevalidatePersistedDeckSnapshot,
+-  ]);
+-
+-  const shouldRevalidatePersistedCardPageSnapshot =
+-    session !== undefined &&
+-    selectionReady &&
+-    cardsRoute &&
+-    libraryBootstrapQuery.isSuccess &&
+-    Boolean(cardsPageQuery.data) &&
+-    !cardsPageQuery.isFetchedAfterMount;
+-  React.useEffect(() => {
+-    if (!shouldRevalidatePersistedCardPageSnapshot) return;
+-
+-    return schedulePostPaintQueryRefresh(() => {
+-      void queryClient.invalidateQueries({ queryKey: selectedCardsPageKey, exact: true });
+-    });
+-  }, [
+-    queryClient,
+-    selectedCardsPageKey,
+-    shouldRevalidatePersistedCardPageSnapshot,
+-  ]);
+-
+-  React.useEffect(() => {
+-    if (!settingsQuery.isSuccess || restoredSelectionRef.current) return;
+-
+-    if (decksRoute) {
+-      restoredSelectionRef.current = true;
+-      setSelectedDeckIds([]);
+-      setSelectionReady(true);
+-      return;
+-    }
+-
+-    const nextSelectedDeckIds = dedupeDeckIds([
+-      ...routeSelectedDeckIds,
+-      ...(routeSelectedDeckIds.length === 0 ? settings.selectedDeckIds : []),
+-    ]);
+-
+-    restoredSelectionRef.current = true;
+-    setSelectedDeckIds(nextSelectedDeckIds);
+-    setSelectionReady(true);
+-  }, [decksRoute, routeSelectedDeckIds, settings.selectedDeckIds, settingsQuery.isSuccess]);
+-
+-  React.useEffect(() => {
+-    if (!selectionReady || !libraryBootstrapQuery.isSuccess) return;
+-    setSelectedDeckIds((prev) => {
+-      const next = prev.filter((deckId) => validDeckIdSet.has(deckId));
+-      if (next.length === prev.length && next.every((deckId, index) => deckId === prev[index])) {
+-        return prev;
+-      }
+-      return next;
+-    });
+-  }, [libraryBootstrapQuery.isSuccess, selectionReady, validDeckIdSet]);
++    settings,
++    settingsReady: settingsQuery.isSuccess,
++    settingsKey,
++    libraryReady: libraryBootstrapQuery.isSuccess,
++    validDeckIdSet,
++    selectedDeckQueryIds,
++    validSelectedDeckIds,
++    syncedSelectedDeckIds,
++  });
+ 
+   React.useEffect(() => {
+     if (!selectionReady) return;
+@@ -1089,66 +807,6 @@ export function MainAppRoute({
+     if (cardsScrollRegionRef.current) cardsScrollRegionRef.current.scrollTop = 0;
+   }, [selectCardsMode, selectedDeckIds, selectionReady]);
+ 
+-  React.useEffect(() => {
+-    if (decksRoute) return;
+-    if (!selectionReady || !settingsQuery.isSuccess) return;
+-    const current = dedupeDeckIds(settings.selectedDeckIds);
+-    const next = dedupeDeckIds(syncedSelectedDeckIds);
+-    if (current.join("|") === next.join("|")) return;
+-
+-    queryClient.setQueryData<AppSettings>(settingsKey, {
+-      ...settings,
+-      selectedDeckIds: next,
+-      activePathId: next[0] ?? null,
+-    });
+-
+-    selectedDeckSyncVersionRef.current += 1;
+-    const requestVersion = selectedDeckSyncVersionRef.current;
+-    selectedDeckSyncQueueRef.current = selectedDeckSyncQueueRef.current
+-      .catch(() => {})
+-      .then(async () => {
+-        const updated = await api.setSelectedDecks(next);
+-        if (selectedDeckSyncVersionRef.current !== requestVersion) return;
+-        queryClient.setQueryData(settingsKey, updated);
+-      })
+-      .catch((error) => {
+-        if (selectedDeckSyncVersionRef.current !== requestVersion) return;
+-        console.warn("Failed to sync selected decks", error);
+-      });
+-  }, [decksRoute, queryClient, selectionReady, settings, settings.selectedDeckIds, settingsKey, settingsQuery.isSuccess, syncedSelectedDeckIds]);
+-
+-  const desiredCardsUrl = React.useMemo(
+-    () =>
+-      cardsRoute
+-        ? buildCardsUrl(syncedSelectedDeckIds, {
+-            studyMode,
+-            selectCards: selectCardsMode,
+-          })
+-        : buildDecksUrl(),
+-    [cardsRoute, selectCardsMode, studyMode, syncedSelectedDeckIds],
+-  );
+-
+-  React.useEffect(() => {
+-    if (!selectionReady) return;
+-    if (decksRoute && (incomingRouteSelectedDeckIds.length > 0 || studyMode)) {
+-      router.replace(buildCardsUrl(incomingRouteSelectedDeckIds, { studyMode }));
+-      return;
+-    }
+-    const currentUrl = canonicalizeCardsUrl(
+-      pathname,
+-      searchParams.get("study"),
+-      searchParams.get("decks"),
+-      searchParams.get("tags"),
+-      searchParams.get("select"),
+-    );
+-    if (decksRoute && currentUrl !== buildDecksUrl()) {
+-      router.replace(buildDecksUrl());
+-      return;
+-    }
+-    if (currentUrl === desiredCardsUrl) return;
+-    router.replace(desiredCardsUrl);
+-  }, [decksRoute, desiredCardsUrl, incomingRouteSelectedDeckIds, pathname, router, searchParams, selectionReady, studyMode]);
+-
+   const loading =
+     !selectionReady ||
+     settingsQuery.isPending ||
+@@ -1262,10 +920,6 @@ export function MainAppRoute({
+     !createSubdeckDuplicate &&
+     !creatingSubdeck;
+ 
+-  const filteredCards = React.useMemo(
+-    () => cardsPageQuery.data?.pages.flatMap((page) => page.items) ?? EMPTY_CARD_PAGE_ITEMS,
+-    [cardsPageQuery.data],
+-  );
+   React.useEffect(() => {
+     if (!cardsRoute) return;
+ 
+@@ -1605,118 +1259,25 @@ export function MainAppRoute({
+     setPreviewCardId(null);
+   }, [previewCardId, previewCardQuery.error, previewCardQuery.isError]);
+ 
+-  const setLibraryBootstrapData = React.useCallback(
+-    (
+-      updater: (
+-        previous: LibraryBootstrap,
+-      ) => LibraryBootstrap,
+-    ) => {
+-      queryClient.setQueryData(
+-        libraryBootstrapKey,
+-        (previous: LibraryBootstrap | undefined) => (previous ? updater(previous) : previous),
+-      );
+-    },
+-    [libraryBootstrapKey, queryClient],
+-  );
+-
+-  const setDeckCatalogData = React.useCallback(
+-    (
+-      updater: (
+-        previous: Deck[],
+-      ) => Deck[],
+-    ) => {
+-      queryClient.setQueryData(
+-        deckCatalogKey,
+-        (previous: Deck[] | undefined) => (previous ? updater(previous) : previous),
+-      );
+-    },
+-    [deckCatalogKey, queryClient],
+-  );
+-
+-  const setSelectedCardActivityData = React.useCallback(
+-    (
+-      updater: (
+-        previous: CardActivity[],
+-      ) => CardActivity[],
+-    ) => {
+-      queryClient.setQueryData(
+-        selectedCardActivityKey,
+-        (previous: CardActivity[] | undefined) => (previous ? updater(previous) : previous),
+-      );
+-    },
+-    [queryClient, selectedCardActivityKey],
+-  );
+-
+-  const setCardsPageData = React.useCallback(
+-    (
+-      updater: (
+-        previous: InfiniteData<CardPageResult, number>,
+-      ) => InfiniteData<CardPageResult, number>,
+-    ) => {
+-      queryClient.setQueryData(
+-        selectedCardsPageKey,
+-        (
+-          previous:
+-            | InfiniteData<CardPageResult, number>
+-            | undefined,
+-        ) => (previous ? updater(previous) : previous),
+-      );
+-    },
+-    [queryClient, selectedCardsPageKey],
+-  );
+-
+-  const invalidateCurrentCardsView = React.useCallback(async () => {
+-    await Promise.all([
+-      queryClient.invalidateQueries({ queryKey: libraryBootstrapKey, exact: true }),
+-      queryClient.invalidateQueries({ queryKey: deckCatalogKey, exact: true }),
+-      queryClient.invalidateQueries({ queryKey: selectedCardActivityKey, exact: true }),
+-      queryClient.invalidateQueries({ queryKey: selectedCardsPageKey }),
+-      queryClient.invalidateQueries({ queryKey: ["cards", scope, "chain"] }),
+-      queryClient.invalidateQueries({ queryKey: ["cards", scope, "activity-by-ids"] }),
+-    ]);
+-  }, [deckCatalogKey, libraryBootstrapKey, queryClient, scope, selectedCardActivityKey, selectedCardsPageKey]);
+-
+-  const invalidateScopedCards = React.useCallback(async () => {
+-    await queryClient.invalidateQueries({ queryKey: ["cards", scope] });
+-  }, [queryClient, scope]);
+-
+-  const applyDeckToCaches = React.useCallback(
+-    (deck: Deck) => {
+-      setOptimisticDecks((previous) => upsertDeckList(previous, deck));
+-      setLibraryBootstrapData((previous) => {
+-        return {
+-          ...previous,
+-          decks: upsertDeckList(previous.decks, deck),
+-        };
+-      });
+-      setDeckCatalogData((previous) => upsertDeckList(previous, deck));
+-    },
+-    [setDeckCatalogData, setLibraryBootstrapData],
+-  );
+-
+-  const replaceDeckInCaches = React.useCallback(
+-    (previousDeckId: string, deck: Deck) => {
+-      setOptimisticDecks((previous) => replaceDeckInList(previous, previousDeckId, deck));
+-      setLibraryBootstrapData((previous) => ({
+-        ...previous,
+-        decks: replaceDeckInList(previous.decks, previousDeckId, deck),
+-      }));
+-      setDeckCatalogData((previous) => replaceDeckInList(previous, previousDeckId, deck));
+-    },
+-    [setDeckCatalogData, setLibraryBootstrapData],
+-  );
+-
+-  const removeDeckFromCaches = React.useCallback(
+-    (deckId: string) => {
+-      setOptimisticDecks((previous) => previous.filter((deck) => deck.id !== deckId));
+-      setLibraryBootstrapData((previous) => ({
+-        ...previous,
+-        decks: previous.decks.filter((deck) => deck.id !== deckId),
+-      }));
+-      setDeckCatalogData((previous) => previous.filter((deck) => deck.id !== deckId));
+-    },
+-    [setDeckCatalogData, setLibraryBootstrapData],
+-  );
++  const {
++    setLibraryBootstrapData,
++    setDeckCatalogData,
++    setSelectedCardActivityData,
++    setCardsPageData,
++    invalidateCurrentCardsView,
++    invalidateScopedCards,
++    applyDeckToCaches,
++    replaceDeckInCaches,
++    removeDeckFromCaches,
++  } = useDeckCacheController({
++    queryClient,
++    scope,
++    libraryBootstrapKey,
++    deckCatalogKey,
++    selectedCardActivityKey,
++    selectedCardsPageKey,
++    setOptimisticDecks,
++  });
+ 
+   const createDeck = React.useCallback(
+     async (name: string) => {
+
+
+# NOTE: This worker created untracked files that are not represented in git diff output.
+# See untracked-files.txt and the worker worktree path in run.json.

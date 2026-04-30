@@ -1,0 +1,30 @@
+# Headful Codex screen capture
+
+This worker ran in the interactive Codex TUI. The final visible pane capture is below.
+
+```text
+                 ) : null}
+                 <div className="mx-auto w-full max-w-6xl px-2.5 sm:px-4">
+
+• Ran git status --short
+  └  M frontend-react/src/app.css
+     M frontend-react/src/features/decks/components/DeckDesktopShell.tsx
+
+• Explored
+  └ Read app.css, DeckDesktopShell.tsx, MEMORY.md
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• Implemented the decks-home header width alignment. The header now sits inside a deck-browser-header-frame that mirrors the deck browser/table width: 30rem mobile
+  cap and 48rem desktop cap.
+
+  Files Changed
+
+  - frontend-react/src/app.css:284
+Token usage: total=75,399 input=65,953 (+ 752,640 cached) output=9,446 (reasoning 5,244)
+To continue this session, run codex resume 019dd8ca-5b74-76f1-bc66-9e902a7f1c8c
+
+
+
+
+```

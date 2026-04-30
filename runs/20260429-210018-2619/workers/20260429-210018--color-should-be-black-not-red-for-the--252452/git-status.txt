@@ -1,0 +1,5 @@
+ M frontend-react/src/features/decks/components/DeckBrowserTable.test.tsx
+ M frontend-react/src/features/decks/components/DeckBrowserTable.tsx
+ M frontend-react/src/features/study/components/StudyControls.test.tsx
+ M frontend-react/src/shared/ui/review-state-summary.test.tsx
+ M frontend-react/src/shared/ui/review-state-summary.tsx

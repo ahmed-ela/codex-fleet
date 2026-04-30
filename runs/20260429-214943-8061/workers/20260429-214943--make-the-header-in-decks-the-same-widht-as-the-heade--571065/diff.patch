@@ -1,0 +1,19 @@
+diff --git a/frontend-react/src/features/decks/components/DeckDesktopShell.tsx b/frontend-react/src/features/decks/components/DeckDesktopShell.tsx
+index e42943b..d660321 100644
+--- a/frontend-react/src/features/decks/components/DeckDesktopShell.tsx
++++ b/frontend-react/src/features/decks/components/DeckDesktopShell.tsx
+@@ -26,9 +26,7 @@ export function DeckDesktopShell({ model }: { model: DeckScreenModel }) {
+           <div className="flex min-h-0 flex-col gap-2.5 pt-2.5 sm:gap-3 sm:pt-3">
+             {model.desktopHeader ? (
+               <div className="mx-auto w-full max-w-6xl px-2.5 sm:px-4">
+-                <div className="deck-browser-header-frame">
+-                  <DeckDesktopMenu model={model.desktopHeader} />
+-                </div>
++                <DeckDesktopMenu model={model.desktopHeader} />
+               </div>
+             ) : null}
+             {!model.desktopViewport && model.mode === "decks" ? (
+
+
+# NOTE: This worker created untracked files that are not represented in git diff output.
+# See untracked-files.txt and the worker worktree path in run.json.

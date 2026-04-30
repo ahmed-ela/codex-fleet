@@ -1,0 +1,74 @@
+# Headful Codex reconciler screen capture
+
+The reconciler ran in the interactive Codex TUI. The final visible pane capture is below.
+
+```text
+• The focused suite passed: 5 files and 75 tests. I’m running the frontend lint check as the broad sanity pass now, since these changes touch component props and test assertions.
+
+• Ran bun run --cwd frontend-react lint
+  └ (no output)
+
+• Ran git status --short
+  └  M frontend-react/src/features/decks/components/DeckDesktopMenu.test.tsx
+     M frontend-react/src/features/decks/components/DeckDesktopShell.tsx
+    … +4 lines (ctrl + t to view transcript)
+     M frontend-react/src/features/study/lib/studyTime.ts
+    ?? frontend-react/src/features/decks/components/DeckDesktopShell.test.tsx
+
+• Ran git diff --check
+  └ (no output)
+
+• Explored
+  └ Search \bCram\b in frontend-react
+
+• Updated Plan
+  └ The scoped Vitest suite, frontend lint, diff whitespace check, and visible capitalized Cram search all passed.
+    ✔ Inspect successful worker summaries, diffs, and current checkout state
+    ✔ Apply reconciled changes to main checkout without touching artifacts
+    ✔ Run focused tests/checks
+    □ Summarize merge, files, tests, skipped jobs, and risks
+
+• Explored
+  └ Read MEMORY.md
+    List git ls-files --others --exclude-standard
+
+• Ran git diff --name-only
+  └ frontend-react/src/features/decks/components/DeckDesktopMenu.test.tsx
+    frontend-react/src/features/decks/components/DeckDesktopShell.tsx
+    … +3 lines (ctrl + t to view transcript)
+    frontend-react/src/features/study/lib/studyTime.test.ts
+    frontend-react/src/features/study/lib/studyTime.ts
+
+• Ran git diff --stat -- . ':!.codex-fleet'
+  └  .../decks/components/DeckDesktopMenu.test.tsx      |  4 +-
+     .../features/decks/components/DeckDesktopShell.tsx |  4 +-
+    … +4 lines (ctrl + t to view transcript)
+     frontend-react/src/features/study/lib/studyTime.ts |  2 +-
+     7 files changed, 51 insertions(+), 29 deletions(-)
+
+• Updated Plan
+  └ Ready to report the reconciled main-checkout changes. No commits were made and `.codex-fleet` artifacts were left read-only.
+    ✔ Inspect successful worker summaries, diffs, and current checkout state
+    ✔ Apply reconciled changes to main checkout without touching artifacts
+    ✔ Run focused tests/checks
+    ✔ Summarize merge, files, tests, skipped jobs, and risks
+
+• Waited for background terminal
+
+─ Worked for 1m 04s ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• Merged
+  Reconciled all 3 successful workers into the main checkout without committing or editing .codex-fleet.
+
+  - Deck home desktop header now uses the same max-w-6xl header width as the inside-deck view.
+  - Visible Cram copy is now Study; internal cram mode/session keys were preserved.
+  - Desktop Add deck and Add card header actions are plus-icon-only while keeping accessible names.
+
+  Files Changed
+Token usage: total=78,535 input=68,540 (+ 1,412,864 cached) output=9,995 (reasoning 3,803)
+To continue this session, run codex resume 019ddc19-6e53-7693-9064-f21290635d23
+
+
+
+
+```

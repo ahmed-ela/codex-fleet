@@ -1,0 +1,1152 @@
+diff --git a/frontend-react/src/features/decks/components/DeckBrowserTable.test.tsx b/frontend-react/src/features/decks/components/DeckBrowserTable.test.tsx
+index 7703314..b113de9 100644
+--- a/frontend-react/src/features/decks/components/DeckBrowserTable.test.tsx
++++ b/frontend-react/src/features/decks/components/DeckBrowserTable.test.tsx
+@@ -2,6 +2,12 @@ import { fireEvent, render, screen, within } from "@testing-library/react";
+ import { describe, expect, it, vi } from "vitest";
+ import { DeckBrowserTable } from "./DeckBrowserTable";
+ 
++function textContentEquals(expected: string) {
++  return (_content: string, node: Element | null) =>
++    node?.textContent === expected &&
++    Array.from(node.children).every((child) => child.textContent !== expected);
++}
++
+ const baseDeck = {
+   id: "tag-bio",
+   name: "Biology",
+@@ -68,6 +74,7 @@ describe("DeckBrowserTable", () => {
+     );
+ 
+     expect(screen.getByText("Name")).toBeInTheDocument();
++    expect(screen.getAllByText("Progress").length).toBeGreaterThan(0);
+   });
+ 
+   it("omits due counts from the deck browser stats", () => {
+@@ -87,7 +94,7 @@ describe("DeckBrowserTable", () => {
+     expect(screen.queryByText("Due")).not.toBeInTheDocument();
+   });
+ 
+-  it("shows done counts with the green active number", () => {
++  it("shows progress with the active remaining number", () => {
+     render(
+       <DeckBrowserTable
+         rows={[baseRow]}
+@@ -102,10 +109,10 @@ describe("DeckBrowserTable", () => {
+     );
+ 
+     const row = screen.getByRole("button", { name: "Biology" });
+-    const donePill = within(row).getByText((_content, node) => node?.textContent === "Done1");
++    const progressPill = within(row).getByText(textContentEquals("Progress1/2"));
+ 
+-    expect(donePill).toBeInTheDocument();
+-    expect(within(donePill).getByText("1")).toHaveClass("text-emerald-600");
++    expect(progressPill).toBeInTheDocument();
++    expect(within(progressPill).getByText("1/2")).toHaveClass("text-rose-600");
+   });
+ 
+   it("shows an empty state when no decks match", () => {
+diff --git a/frontend-react/src/features/decks/components/DeckBrowserTable.tsx b/frontend-react/src/features/decks/components/DeckBrowserTable.tsx
+index 32c5df8..e2321ff 100644
+--- a/frontend-react/src/features/decks/components/DeckBrowserTable.tsx
++++ b/frontend-react/src/features/decks/components/DeckBrowserTable.tsx
+@@ -8,6 +8,7 @@ import { formatStudyTimeEstimate, formatStudyTimeEstimateRange } from "@/feature
+ import type { Deck } from "@/lib/types";
+ import { cn } from "@/lib/utils";
+ import type { DeckBrowserRow } from "@/features/decks/lib/deckBrowser";
++import { formatReviewProgress, getReviewProgressRemaining } from "@/shared/ui/review-state-summary";
+ 
+ function formatDeckCount(count: number) {
+   return count > 999 ? "999+" : String(count);
+@@ -16,21 +17,26 @@ function formatDeckCount(count: number) {
+ const ACTION_MENU_WIDTH = 176;
+ const ACTION_MENU_HEIGHT = 238;
+ 
+-function CountCell({
+-  value,
+-  activeClassName,
+-}: {
+-  value: number;
+-  activeClassName: string;
+-}) {
++function getDeckProgress(row: DeckBrowserRow) {
++  const remainingCount = getReviewProgressRemaining(row.totalCards, row.doneCount);
++  return {
++    remainingCount,
++    totalCount: row.totalCards,
++    label: formatReviewProgress(remainingCount, row.totalCards),
++  };
++}
++
++function ProgressCell({ row }: { row: DeckBrowserRow }) {
++  const progress = getDeckProgress(row);
++
+   return (
+     <div
+       className={cn(
+         "w-full pr-1 text-right text-sm font-semibold tabular-nums",
+-        value > 0 ? activeClassName : "text-muted-foreground/60",
++        progress.remainingCount > 0 ? "text-rose-600" : "text-muted-foreground/60",
+       )}
+     >
+-      {formatDeckCount(value)}
++      {progress.label}
+     </div>
+   );
+ }
+@@ -39,16 +45,21 @@ function MobileStatPill({
+   label,
+   value,
+   activeClassName,
++  active,
+ }: {
+   label: string;
+-  value: number;
++  value: number | string;
+   activeClassName: string;
++  active?: boolean;
+ }) {
++  const isActive = active ?? (typeof value === "number" ? value > 0 : true);
++  const displayValue = typeof value === "number" ? formatDeckCount(value) : value;
++
+   return (
+     <div
+       className={cn(
+         "inline-flex items-center gap-1 rounded-full border px-2 py-1 text-[11px] font-semibold leading-none shadow-[0_1px_0_rgb(15_23_42_/_0.04)]",
+-        value > 0
++        isActive
+           ? "border-border bg-background text-foreground"
+           : "border-transparent bg-muted/45 text-muted-foreground/70",
+       )}
+@@ -57,10 +68,10 @@ function MobileStatPill({
+       <span
+         className={cn(
+           "min-w-4 text-right tabular-nums",
+-          value > 0 ? activeClassName : "text-muted-foreground/60",
++          isActive ? activeClassName : "text-muted-foreground/60",
+         )}
+       >
+-        {formatDeckCount(value)}
++        {displayValue}
+       </span>
+     </div>
+   );
+@@ -189,8 +200,8 @@ export function DeckBrowserTable({
+     [expandedById, rows],
+   );
+   const desktopGridColumns = showStudyTimeColumns
+-    ? "lg:grid-cols-[minmax(0,1fr)_4rem_4rem_4rem_7.5rem_7.5rem_2.25rem]"
+-    : "lg:grid-cols-[minmax(0,1fr)_4rem_4rem_4rem_2.25rem]";
++    ? "lg:grid-cols-[minmax(0,1fr)_5.5rem_7.5rem_7.5rem_2.25rem]"
++    : "lg:grid-cols-[minmax(0,1fr)_5.5rem_2.25rem]";
+ 
+   return (
+     <section className="flex h-auto min-h-0 min-w-0 max-h-[min(60svh,32rem)] flex-col overflow-hidden rounded-[1.25rem] border border-border/70 bg-card/80 shadow-[0_16px_42px_rgb(15_23_42_/_0.08)] sm:max-h-[min(68svh,34rem)] sm:rounded-2xl lg:h-auto lg:max-h-[min(52svh,38rem)]">
+@@ -198,9 +209,7 @@ export function DeckBrowserTable({
+         <div className="px-2 text-left text-sm font-semibold normal-case tracking-normal text-foreground">
+           Name
+         </div>
+-        <div className="pr-1 text-right text-foreground">New</div>
+-        <div className="pr-1 text-right text-foreground">Learn</div>
+-        <div className="pr-1 text-right text-foreground">Done</div>
++        <div className="pr-1 text-right text-foreground">Progress</div>
+         {showStudyTimeColumns ? (
+           <>
+             <div className="pr-1 text-right text-foreground">Time</div>
+@@ -226,6 +235,7 @@ export function DeckBrowserTable({
+           const selected = selectedDeckKey === row.descendantDeckIds.slice().sort().join("|");
+           const menuOpen = menuRowId === row.id;
+           const resetEnabled = canResetDeck ? canResetDeck(row) : row.learnCount + row.dueCount > 0;
++          const progress = getDeckProgress(row);
+ 
+           return (
+             <div
+@@ -283,20 +293,11 @@ export function DeckBrowserTable({
+                 </span>
+                 <div className="ml-auto flex max-w-[14rem] shrink-0 flex-wrap justify-end gap-1 pr-1 lg:hidden">
+                   <MobileStatPill
+-                    label="New"
+-                    value={row.newCount}
+-                    activeClassName="text-sky-600"
+-                  />
+-                  <MobileStatPill
+-                    label="Learn"
+-                    value={row.learnCount}
++                    label="Progress"
++                    value={progress.label}
++                    active={progress.remainingCount > 0}
+                     activeClassName="text-rose-600"
+                   />
+-                  <MobileStatPill
+-                    label="Done"
+-                    value={row.doneCount}
+-                    activeClassName="text-emerald-600"
+-                  />
+                   {showStudyTimeColumns ? (
+                     <>
+                       {getStudyTimeTotalMs(row) > 0 ? (
+@@ -315,13 +316,7 @@ export function DeckBrowserTable({
+               </div>
+ 
+               <div className="hidden lg:block">
+-                <CountCell value={row.newCount} activeClassName="text-sky-600" />
+-              </div>
+-              <div className="hidden lg:block">
+-                <CountCell value={row.learnCount} activeClassName="text-rose-600" />
+-              </div>
+-              <div className="hidden lg:block">
+-                <CountCell value={row.doneCount} activeClassName="text-emerald-600" />
++                <ProgressCell row={row} />
+               </div>
+               {showStudyTimeColumns ? (
+                 <>
+diff --git a/frontend-react/src/features/decks/components/MainAppRoute.test.tsx b/frontend-react/src/features/decks/components/MainAppRoute.test.tsx
+index 600c245..87f8f45 100644
+--- a/frontend-react/src/features/decks/components/MainAppRoute.test.tsx
++++ b/frontend-react/src/features/decks/components/MainAppRoute.test.tsx
+@@ -349,16 +349,22 @@ function getPrimaryDecksButton() {
+   return screen.getAllByRole('button', { name: 'Decks' }).at(0)!
+ }
+ 
++function textContentEquals(expected: string) {
++  return (_content: string, node: Element | null) =>
++    node?.textContent === expected &&
++    Array.from(node.children).every((child) => child.textContent !== expected)
++}
++
+ function expectVisibleCountLabel(label: string) {
+-  expect(screen.getAllByText((_content, node) => node?.textContent === label).length).toBeGreaterThan(0)
++  expect(screen.getAllByText(textContentEquals(label)).length).toBeGreaterThan(0)
+ }
+ 
+ function expectNoVisibleCountLabel(label: string) {
+-  expect(screen.queryByText((_content, node) => node?.textContent === label)).not.toBeInTheDocument()
++  expect(screen.queryByText(textContentEquals(label))).not.toBeInTheDocument()
+ }
+ 
+-function expectDeckBrowserStat(row: HTMLElement, label: string, value: number) {
+-  expect(within(row).getByText((_content, node) => node?.textContent === `${label}${value}`)).toBeInTheDocument()
++function expectDeckBrowserStat(row: HTMLElement, label: string, value: number | string) {
++  expect(within(row).getByText(textContentEquals(`${label}${value}`))).toBeInTheDocument()
+ }
+ 
+ describe('MainAppRoute', () => {
+@@ -418,7 +424,8 @@ describe('MainAppRoute', () => {
+     renderDecksRoute()
+ 
+     expect(await screen.findByRole('button', { name: 'Biology' })).toBeInTheDocument()
+-    expect(screen.getAllByText('Learn').length).toBeGreaterThan(0)
++    expect(screen.getAllByText('Progress').length).toBeGreaterThan(0)
++    expect(screen.queryByText('Learn')).not.toBeInTheDocument()
+     expect(screen.queryByText('Due')).not.toBeInTheDocument()
+ 
+     await selectDeck('Biology', 'tag-bio')
+@@ -759,7 +766,7 @@ describe('MainAppRoute', () => {
+     expect(within(mobileDock).getByRole('button', { name: 'Add card' })).toHaveClass('rounded-full')
+   })
+ 
+-  it('shows the selected deck review state counts in the in-deck title area', async () => {
++  it('shows selected deck progress in the in-deck title area', async () => {
+     seedStore([
+       buildCard('card-new', ['tag-bio'], ['Biology'], 'New card', '2026-04-14T00:00:01.000Z'),
+       buildCard('card-learn', ['tag-bio'], ['Biology'], 'Learn card', '2026-04-14T00:00:02.000Z'),
+@@ -784,9 +791,10 @@ describe('MainAppRoute', () => {
+     await waitForPreviewCards(3)
+ 
+     expect(screen.getByText('Biology')).toBeInTheDocument()
+-    expect(screen.getByText((_content, node) => node?.textContent === 'New 1')).toBeInTheDocument()
+-    expect(screen.getByText((_content, node) => node?.textContent === 'Learn 1')).toBeInTheDocument()
+-    expect(screen.getByText((_content, node) => node?.textContent === 'Done 1')).toBeInTheDocument()
++    expectVisibleCountLabel('Progress 2/3')
++    expectNoVisibleCountLabel('New 1')
++    expectNoVisibleCountLabel('Learn 1')
++    expectNoVisibleCountLabel('Done 1')
+     expectNoVisibleCountLabel('Due 1')
+   })
+ 
+@@ -818,23 +826,22 @@ describe('MainAppRoute', () => {
+ 
+     const biologyRow = await screen.findByRole('button', { name: 'Biology' })
+     await waitFor(() => {
+-      expectDeckBrowserStat(biologyRow, 'New', 12)
+-      expectDeckBrowserStat(biologyRow, 'Learn', 6)
+-      expectDeckBrowserStat(biologyRow, 'Done', 1)
++      expectDeckBrowserStat(biologyRow, 'Progress', '18/19')
+     })
+ 
+     deckRoute.unmount()
+     renderCardsRoute()
+     await waitForPreviewCards(19)
+ 
+-    expectVisibleCountLabel('New 12')
+-    expectVisibleCountLabel('Learn 6')
+-    expectVisibleCountLabel('Done 1')
++    expectVisibleCountLabel('Progress 18/19')
++    expectNoVisibleCountLabel('New 12')
++    expectNoVisibleCountLabel('Learn 6')
++    expectNoVisibleCountLabel('Done 1')
+     expectNoVisibleCountLabel('New 19')
+     expectNoVisibleCountLabel('Learn 0')
+   })
+ 
+-  it('shows New, Learn, and Done counts at the top of the mobile selected deck view', async () => {
++  it('shows progress at the top of the mobile selected deck view', async () => {
+     Object.defineProperty(window, 'matchMedia', {
+       writable: true,
+       value: vi.fn().mockImplementation(() => ({
+@@ -874,9 +881,10 @@ describe('MainAppRoute', () => {
+     const mobileTitleStack = screen.getByTestId('deck-mobile-title-stack')
+     expect(mobileTitleStack).toHaveClass('min-h-14', 'pt-1', 'text-center')
+     expect(within(mobileTitleStack).getByText('Biology')).toBeInTheDocument()
+-    expect(within(mobileTitleStack).getByText((_content, node) => node?.textContent === 'New 1')).toBeInTheDocument()
+-    expect(within(mobileTitleStack).getByText((_content, node) => node?.textContent === 'Learn 1')).toBeInTheDocument()
+-    expect(within(mobileTitleStack).getByText((_content, node) => node?.textContent === 'Done 1')).toBeInTheDocument()
++    expect(within(mobileTitleStack).getByText(textContentEquals('Progress 2/3'))).toBeInTheDocument()
++    expect(within(mobileTitleStack).queryByText((_content, node) => node?.textContent === 'New 1')).not.toBeInTheDocument()
++    expect(within(mobileTitleStack).queryByText((_content, node) => node?.textContent === 'Learn 1')).not.toBeInTheDocument()
++    expect(within(mobileTitleStack).queryByText((_content, node) => node?.textContent === 'Done 1')).not.toBeInTheDocument()
+     expect(within(mobileTitleStack).queryByText((_content, node) => node?.textContent === 'Due 1')).not.toBeInTheDocument()
+   })
+ 
+@@ -889,18 +897,20 @@ describe('MainAppRoute', () => {
+     renderCardsRoute()
+     await waitForPreviewCards(1)
+ 
+-    expect(screen.getByText((_content, node) => node?.textContent === 'New 1')).toBeInTheDocument()
+-    expect(screen.getByText((_content, node) => node?.textContent === 'Learn 0')).toBeInTheDocument()
+-    expect(screen.getByText((_content, node) => node?.textContent === 'Done 0')).toBeInTheDocument()
++    expectVisibleCountLabel('Progress 1/1')
++    expectNoVisibleCountLabel('New 1')
++    expectNoVisibleCountLabel('Learn 0')
++    expectNoVisibleCountLabel('Done 0')
+     expectNoVisibleCountLabel('Due 0')
+ 
+     fireEvent.keyDown(window, { key: ' ', code: 'Space' })
+ 
+     const studySurface = await screen.findByTestId('study-stage-surface')
+     const studyControls = screen.getByLabelText('Study controls')
+-    expect(within(studyControls).getByText((_content, node) => node?.textContent === 'New 1')).toBeInTheDocument()
+-    expect(within(studyControls).getByText((_content, node) => node?.textContent === 'Learn 0')).toBeInTheDocument()
+-    expect(within(studyControls).getByText((_content, node) => node?.textContent === 'Done 0')).toBeInTheDocument()
++    expect(within(studyControls).getByText(textContentEquals('Progress 1/1'))).toBeInTheDocument()
++    expect(within(studyControls).queryByText((_content, node) => node?.textContent === 'New 1')).not.toBeInTheDocument()
++    expect(within(studyControls).queryByText((_content, node) => node?.textContent === 'Learn 0')).not.toBeInTheDocument()
++    expect(within(studyControls).queryByText((_content, node) => node?.textContent === 'Done 0')).not.toBeInTheDocument()
+     expect(within(studyControls).queryByText((_content, node) => node?.textContent === 'Due 0')).not.toBeInTheDocument()
+     fireEvent.keyDown(studySurface, { key: ' ', code: 'Space' })
+     fireEvent.click(within(studyControls).getByRole('button', { name: /^Good\b/ }))
+@@ -920,9 +930,10 @@ describe('MainAppRoute', () => {
+     fireEvent.click(getPrimaryDecksButton())
+ 
+     await waitFor(() => expect(screen.queryByTestId('study-stage-surface')).not.toBeInTheDocument())
+-    expectVisibleCountLabel('New 0')
+-    expectVisibleCountLabel('Learn 0')
+-    expectVisibleCountLabel('Done 1')
++    expectVisibleCountLabel('Progress 0/1')
++    expectNoVisibleCountLabel('New 0')
++    expectNoVisibleCountLabel('Learn 0')
++    expectNoVisibleCountLabel('Done 1')
+     expectNoVisibleCountLabel('Due 1')
+   })
+ 
+@@ -935,8 +946,9 @@ describe('MainAppRoute', () => {
+     const { unmount } = renderCardsRoute()
+     await waitForPreviewCards(1)
+ 
+-    expect(screen.getByText((_content, node) => node?.textContent === 'New 1')).toBeInTheDocument()
+-    expect(screen.getByText((_content, node) => node?.textContent === 'Learn 0')).toBeInTheDocument()
++    expectVisibleCountLabel('Progress 1/1')
++    expectNoVisibleCountLabel('New 1')
++    expectNoVisibleCountLabel('Learn 0')
+ 
+     fireEvent.keyDown(window, { key: ' ', code: 'Space' })
+ 
+@@ -955,18 +967,17 @@ describe('MainAppRoute', () => {
+         bucket: 'learn',
+       })
+     })
+-    expectVisibleCountLabel('New 0')
+-    expectVisibleCountLabel('Learn 1')
+-    expectVisibleCountLabel('Done 0')
++    expectVisibleCountLabel('Progress 1/1')
++    expectNoVisibleCountLabel('New 0')
++    expectNoVisibleCountLabel('Learn 1')
++    expectNoVisibleCountLabel('Done 0')
+ 
+     unmount()
+     renderDecksRoute()
+ 
+     const biologyRow = await screen.findByRole('button', { name: 'Biology' })
+     await waitFor(() => {
+-      expectDeckBrowserStat(biologyRow, 'New', 0)
+-      expectDeckBrowserStat(biologyRow, 'Learn', 1)
+-      expectDeckBrowserStat(biologyRow, 'Done', 0)
++      expectDeckBrowserStat(biologyRow, 'Progress', '1/1')
+     })
+   })
+ 
+@@ -988,7 +999,7 @@ describe('MainAppRoute', () => {
+ 
+     const route = renderCardsRoute()
+     await waitForPreviewCards(2)
+-    await waitFor(() => expectVisibleCountLabel('Learn 1'))
++    await waitFor(() => expectVisibleCountLabel('Progress 2/2'))
+ 
+     route.rerenderRoute({
+       pathname: '/',
+@@ -997,8 +1008,7 @@ describe('MainAppRoute', () => {
+ 
+     const biologyRow = await screen.findByRole('button', { name: 'Biology' })
+     await waitFor(() => {
+-      expectDeckBrowserStat(biologyRow, 'New', 1)
+-      expectDeckBrowserStat(biologyRow, 'Learn', 1)
++      expectDeckBrowserStat(biologyRow, 'Progress', '2/2')
+     })
+ 
+     await act(async () => {
+@@ -1024,7 +1034,7 @@ describe('MainAppRoute', () => {
+     renderCardsRoute()
+     await waitForPreviewCards(1)
+ 
+-    expect(screen.getByText((_content, node) => node?.textContent === 'New 1')).toBeInTheDocument()
++    expectVisibleCountLabel('Progress 1/1')
+ 
+     fireEvent.keyDown(window, { key: ' ', code: 'Space' })
+ 
+@@ -1056,8 +1066,9 @@ describe('MainAppRoute', () => {
+     fireEvent.click(getPrimaryDecksButton())
+ 
+     await waitFor(() => expect(screen.queryByTestId('study-stage-surface')).not.toBeInTheDocument())
+-    expectVisibleCountLabel('New 1')
+-    expectVisibleCountLabel('Done 0')
++    expectVisibleCountLabel('Progress 1/1')
++    expectNoVisibleCountLabel('New 1')
++    expectNoVisibleCountLabel('Done 0')
+     expectNoVisibleCountLabel('Due 0')
+   })
+ 
+@@ -1131,8 +1142,9 @@ describe('MainAppRoute', () => {
+     renderCardsRoute()
+     await waitForPreviewCards(2)
+ 
+-    expect(screen.getByText((_content, node) => node?.textContent === 'Learn 1')).toBeInTheDocument()
+-    expectVisibleCountLabel('Done 1')
++    expectVisibleCountLabel('Progress 1/2')
++    expectNoVisibleCountLabel('Learn 1')
++    expectNoVisibleCountLabel('Done 1')
+     expectNoVisibleCountLabel('Due 1')
+     expect(screen.queryByRole('button', { name: 'Reset' })).not.toBeInTheDocument()
+     expect(screen.queryByRole('dialog', { name: 'Reset study for “Biology”?' })).not.toBeInTheDocument()
+@@ -1155,7 +1167,8 @@ describe('MainAppRoute', () => {
+     await waitForPreviewCards(1)
+ 
+     expectNoVisibleCountLabel('Due 1')
+-    expectVisibleCountLabel('Done 1')
++    expectVisibleCountLabel('Progress 0/1')
++    expectNoVisibleCountLabel('Done 1')
+     expect(screen.queryByRole('button', { name: 'Study' })).not.toBeInTheDocument()
+     expect(screen.getByRole('button', { name: 'Cram' })).toBeEnabled()
+ 
+@@ -1164,9 +1177,10 @@ describe('MainAppRoute', () => {
+     const studySurface = await screen.findByTestId('study-stage-surface')
+     expect(await within(studySurface).findByText('Biology prompt')).toBeInTheDocument()
+     const studyControls = screen.getByLabelText('Study controls')
+-    expect(within(studyControls).getByText((_content, node) => node?.textContent === 'New 1')).toBeInTheDocument()
+-    expect(within(studyControls).getByText((_content, node) => node?.textContent === 'Learn 0')).toBeInTheDocument()
+-    expect(within(studyControls).getByText((_content, node) => node?.textContent === 'Done 0')).toBeInTheDocument()
++    expect(within(studyControls).getByText(textContentEquals('Progress 1/1'))).toBeInTheDocument()
++    expect(within(studyControls).queryByText((_content, node) => node?.textContent === 'New 1')).not.toBeInTheDocument()
++    expect(within(studyControls).queryByText((_content, node) => node?.textContent === 'Learn 0')).not.toBeInTheDocument()
++    expect(within(studyControls).queryByText((_content, node) => node?.textContent === 'Done 0')).not.toBeInTheDocument()
+     expect(within(studyControls).queryByText((_content, node) => node?.textContent === 'Due 0')).not.toBeInTheDocument()
+ 
+     fireEvent.keyDown(studySurface, { key: ' ', code: 'Space' })
+@@ -1180,7 +1194,8 @@ describe('MainAppRoute', () => {
+ 
+     await waitFor(() => expect(screen.queryByTestId('study-stage-surface')).not.toBeInTheDocument())
+     expectNoVisibleCountLabel('Due 1')
+-    expectVisibleCountLabel('Done 1')
++    expectVisibleCountLabel('Progress 0/1')
++    expectNoVisibleCountLabel('Done 1')
+   }, 10000)
+ 
+   it('auto-resumes the saved cram session from its separate cram session key', async () => {
+@@ -1501,7 +1516,8 @@ describe('MainAppRoute', () => {
+ 
+     await screen.findByRole('button', { name: 'Biology' })
+     expect(screen.queryAllByRole('button', { name: 'Preview card' })).toHaveLength(0)
+-    expect(screen.getAllByText('Learn').length).toBeGreaterThan(0)
++    expect(screen.getAllByText('Progress').length).toBeGreaterThan(0)
++    expect(screen.queryByText('Learn')).not.toBeInTheDocument()
+ 
+     await selectDeck('Biology', 'tag-bio')
+   })
+diff --git a/frontend-react/src/features/decks/components/MainAppRoute.tsx b/frontend-react/src/features/decks/components/MainAppRoute.tsx
+index 6bf4cbf..c11eebd 100644
+--- a/frontend-react/src/features/decks/components/MainAppRoute.tsx
++++ b/frontend-react/src/features/decks/components/MainAppRoute.tsx
+@@ -15,7 +15,10 @@ import {
+   Upload,
+ } from "lucide-react";
+ import { Button } from "@/shared/ui/button";
+-import { ReviewStateSummary } from "@/shared/ui/review-state-summary";
++import {
++  getReviewProgressRemaining,
++  ReviewProgressSummary,
++} from "@/shared/ui/review-state-summary";
+ import { DeckBrowserTable } from "@/features/decks/components/DeckBrowserTable";
+ import { DeckCardGridItem } from "@/features/decks/components/DeckCardGridItem";
+ import { DeckScreen } from "@/features/decks/components/DeckScreen";
+@@ -978,6 +981,11 @@ export function MainAppRoute({
+       countDeckReviewBuckets(visibleSelectedDeckCards, reviewStates),
+     [reviewStates, selectedDeckSavedStudyCounts, visibleSelectedDeckCards],
+   );
++  const selectedDeckProgressTotal = visibleSelectedDeckCards.length;
++  const selectedDeckProgressRemaining = getReviewProgressRemaining(
++    selectedDeckProgressTotal,
++    selectedDeckReviewCounts.doneCount,
++  );
+   const loadedCards = filteredCards;
+   const hasMoreCards = Boolean(cardsPageQuery.hasNextPage);
+   const selectedReviewCardActivity = React.useMemo(
+@@ -1191,12 +1199,9 @@ export function MainAppRoute({
+     () =>
+       hasDeckSelection ? (
+         <div className="flex flex-wrap items-center justify-center gap-x-2 gap-y-1">
+-          <ReviewStateSummary
+-            items={[
+-              { label: "New", value: selectedDeckReviewCounts.newCount, tone: "new" },
+-              { label: "Learn", value: selectedDeckReviewCounts.learnCount, tone: "learn" },
+-              { label: "Done", value: selectedDeckReviewCounts.doneCount, tone: "done" },
+-            ]}
++          <ReviewProgressSummary
++            remainingCount={selectedDeckProgressRemaining}
++            totalCount={selectedDeckProgressTotal}
+             className="justify-center"
+             itemClassName="text-[11px] sm:text-xs"
+           />
+@@ -1222,9 +1227,8 @@ export function MainAppRoute({
+       ) : null,
+     [
+       hasDeckSelection,
+-      selectedDeckReviewCounts.doneCount,
+-      selectedDeckReviewCounts.learnCount,
+-      selectedDeckReviewCounts.newCount,
++      selectedDeckProgressRemaining,
++      selectedDeckProgressTotal,
+       selectedDeckStudyEstimate,
+       selectedDeckStudyTime,
+       studyTimeSurfacesVisible,
+@@ -2843,12 +2847,9 @@ export function MainAppRoute({
+             <div className="max-w-full truncate text-sm font-semibold text-foreground">
+               {workspaceTitle}
+             </div>
+-            <ReviewStateSummary
+-              items={[
+-                { label: "New", value: selectedDeckReviewCounts.newCount, tone: "new" },
+-                { label: "Learn", value: selectedDeckReviewCounts.learnCount, tone: "learn" },
+-                { label: "Done", value: selectedDeckReviewCounts.doneCount, tone: "done" },
+-              ]}
++            <ReviewProgressSummary
++              remainingCount={selectedDeckProgressRemaining}
++              totalCount={selectedDeckProgressTotal}
+               className="mt-1 justify-center gap-x-2 gap-y-1"
+               itemClassName="rounded-full border border-border bg-background px-2 py-1 text-[11px] shadow-[0_1px_0_rgb(15_23_42_/_0.04)]"
+             />
+diff --git a/frontend-react/src/features/study/components/StudyControls.test.tsx b/frontend-react/src/features/study/components/StudyControls.test.tsx
+index eed216d..785cc3c 100644
+--- a/frontend-react/src/features/study/components/StudyControls.test.tsx
++++ b/frontend-react/src/features/study/components/StudyControls.test.tsx
+@@ -2,6 +2,12 @@ import { fireEvent, render, screen, within } from '@testing-library/react'
+ import { describe, expect, it, vi } from 'vitest'
+ import { StudyControls } from './StudyControls'
+ 
++function textContentEquals(expected: string) {
++  return (_content: string, node: Element | null) =>
++    node?.textContent === expected &&
++    Array.from(node.children).every((child) => child.textContent !== expected)
++}
++
+ describe('StudyControls', () => {
+   it('renders the deck-mode summary state and top-level actions', () => {
+     const onBack = vi.fn()
+@@ -21,11 +27,12 @@ describe('StudyControls', () => {
+     )
+ 
+     expect(screen.getByText('Show Answer')).toBeInTheDocument()
+-    expect(screen.getByText((_content, node) => node?.textContent === 'New 3')).toBeInTheDocument()
+-    expect(screen.getByText((_content, node) => node?.textContent === 'Learn 2')).toBeInTheDocument()
+-    const doneItem = screen.getByText((_content, node) => node?.textContent === 'Done 1')
+-    expect(doneItem).toBeInTheDocument()
+-    expect(within(doneItem).getByText('1')).toHaveClass('text-emerald-600')
++    const progressItem = screen.getByText(textContentEquals('Progress 5/6'))
++    expect(progressItem).toBeInTheDocument()
++    expect(within(progressItem).getByText('5/6')).toHaveClass('text-rose-600')
++    expect(screen.queryByText((_content, node) => node?.textContent === 'New 3')).not.toBeInTheDocument()
++    expect(screen.queryByText((_content, node) => node?.textContent === 'Learn 2')).not.toBeInTheDocument()
++    expect(screen.queryByText((_content, node) => node?.textContent === 'Done 1')).not.toBeInTheDocument()
+     expect(screen.queryByText((_content, node) => node?.textContent === 'Due 4')).not.toBeInTheDocument()
+     expect(screen.getByTestId('study-show-answer-hint')).toHaveClass('hidden', 'lg:flex')
+     expect(screen.getByLabelText('Home')).toBeInTheDocument()
+diff --git a/frontend-react/src/features/study/components/StudyControls.tsx b/frontend-react/src/features/study/components/StudyControls.tsx
+index 4f6107d..994e652 100644
+--- a/frontend-react/src/features/study/components/StudyControls.tsx
++++ b/frontend-react/src/features/study/components/StudyControls.tsx
+@@ -6,7 +6,10 @@ import {
+ } from "lucide-react";
+ import { Button } from "@/shared/ui/button";
+ import { Kbd } from "@/shared/ui/kbd";
+-import { ReviewStateSummary } from "@/shared/ui/review-state-summary";
++import {
++  getReviewProgressRemaining,
++  ReviewProgressSummary,
++} from "@/shared/ui/review-state-summary";
+ import { cn } from "@/lib/utils";
+ 
+ const noop = () => {};
+@@ -33,6 +36,7 @@ export function StudyControls({
+   studyEstimateMeta = null,
+   learningCount = 0,
+   unseenCount = 0,
++  dueCount = 0,
+   doneCount = 0,
+   onBack = noop,
+   onWrong = noop,
+@@ -56,6 +60,7 @@ export function StudyControls({
+   studyEstimateMeta?: string | null;
+   learningCount?: number;
+   unseenCount?: number;
++  dueCount?: number;
+   doneCount?: number;
+   onBack?: () => void;
+   onWrong?: () => void;
+@@ -76,6 +81,8 @@ export function StudyControls({
+   const compactWrongLabel = compactReviewButtonLabel(wrongButtonText, "↺");
+   const compactRightLabel = compactReviewButtonLabel(rightButtonText, "✓");
+   const deckCenterHasMeta = Boolean(cardTimeMeta || studyEstimateMeta);
++  const reviewProgressTotal = unseenCount + learningCount + dueCount + doneCount;
++  const reviewProgressRemaining = getReviewProgressRemaining(reviewProgressTotal, doneCount);
+   const deckCenterHasVisibleContent =
+     mode !== "deck" ||
+     (flipped
+@@ -186,12 +193,9 @@ export function StudyControls({
+                   <span>Show Answer</span>
+                 </div>
+                 {showReviewSummary ? (
+-                  <ReviewStateSummary
+-                    items={[
+-                      { label: "New", value: unseenCount, tone: "new" },
+-                      { label: "Learn", value: learningCount, tone: "learn" },
+-                      { label: "Done", value: doneCount, tone: "done" },
+-                    ]}
++                  <ReviewProgressSummary
++                    remainingCount={reviewProgressRemaining}
++                    totalCount={reviewProgressTotal}
+                     className="hidden lg:flex"
+                   />
+                 ) : null}
+diff --git a/frontend-react/src/features/study/components/StudyDeckOverlay.test.tsx b/frontend-react/src/features/study/components/StudyDeckOverlay.test.tsx
+index a5a1589..801d64b 100644
+--- a/frontend-react/src/features/study/components/StudyDeckOverlay.test.tsx
++++ b/frontend-react/src/features/study/components/StudyDeckOverlay.test.tsx
+@@ -66,7 +66,9 @@ vi.mock('@/features/cards/components/CardEditorOverlay', async () => {
+ })
+ 
+ function textContentEquals(expected: string) {
+-  return (_content: string, node: Element | null) => node?.textContent === expected
++  return (_content: string, node: Element | null) =>
++    node?.textContent === expected &&
++    Array.from(node.children).every((child) => child.textContent !== expected)
+ }
+ 
+ function buildOcclusionCard(): Card {
+@@ -215,9 +217,10 @@ describe('StudyDeckOverlay', () => {
+     )
+ 
+     expect(await screen.findByRole('button', { name: 'Home' })).toBeInTheDocument()
+-    expect(screen.getByText(textContentEquals('Learn 0'))).toBeInTheDocument()
+-    expect(screen.getByText(textContentEquals('New 1'))).toBeInTheDocument()
+-    expect(screen.getByText(textContentEquals('Done 0'))).toBeInTheDocument()
++    expect(screen.getByText(textContentEquals('Progress 1/1'))).toBeInTheDocument()
++    expect(screen.queryByText(textContentEquals('Learn 0'))).not.toBeInTheDocument()
++    expect(screen.queryByText(textContentEquals('New 1'))).not.toBeInTheDocument()
++    expect(screen.queryByText(textContentEquals('Done 0'))).not.toBeInTheDocument()
+     expect(screen.queryByText(textContentEquals('Due 0'))).not.toBeInTheDocument()
+     expect(screen.queryByText('Covered')).not.toBeInTheDocument()
+     expect(await screen.findAllByTestId('occlusion-cover')).toHaveLength(1)
+@@ -227,6 +230,7 @@ describe('StudyDeckOverlay', () => {
+       fireEvent.keyDown(screen.getByTestId('study-stage-surface'), { key: ' ', code: 'Space' })
+     })
+ 
++    expect(screen.queryByText(textContentEquals('Progress 1/1'))).not.toBeInTheDocument()
+     expect(screen.queryByText(textContentEquals('Learn 0'))).not.toBeInTheDocument()
+     expect(screen.queryByText(textContentEquals('New 1'))).not.toBeInTheDocument()
+     expect(screen.queryByText(textContentEquals('Done 0'))).not.toBeInTheDocument()
+@@ -298,9 +302,10 @@ describe('StudyDeckOverlay', () => {
+     const titleStack = await screen.findByTestId('study-mobile-title-stack')
+     expect(titleStack).toHaveClass('min-h-14', 'pt-1', 'text-center')
+     expect(within(titleStack).getByText('Biology')).toBeInTheDocument()
+-    expect(within(titleStack).getByText(textContentEquals('New 2'))).toBeInTheDocument()
+-    expect(within(titleStack).getByText(textContentEquals('Learn 0'))).toBeInTheDocument()
+-    expect(within(titleStack).getByText(textContentEquals('Done 0'))).toBeInTheDocument()
++    expect(within(titleStack).getByText(textContentEquals('Progress 2/2'))).toBeInTheDocument()
++    expect(within(titleStack).queryByText(textContentEquals('New 2'))).not.toBeInTheDocument()
++    expect(within(titleStack).queryByText(textContentEquals('Learn 0'))).not.toBeInTheDocument()
++    expect(within(titleStack).queryByText(textContentEquals('Done 0'))).not.toBeInTheDocument()
+     expect(within(titleStack).queryByText(textContentEquals('Due 0'))).not.toBeInTheDocument()
+ 
+     fireEvent.keyDown(await screen.findByTestId('study-stage-surface'), { key: ' ', code: 'Space' })
+@@ -522,14 +527,16 @@ describe('StudyDeckOverlay', () => {
+       />,
+     )
+ 
+-    expect(await screen.findByText(textContentEquals('Learn 0'))).toBeInTheDocument()
+-    expect(screen.getByText(textContentEquals('New 2'))).toBeInTheDocument()
++    expect(await screen.findByText(textContentEquals('Progress 2/2'))).toBeInTheDocument()
++    expect(screen.queryByText(textContentEquals('Learn 0'))).not.toBeInTheDocument()
++    expect(screen.queryByText(textContentEquals('New 2'))).not.toBeInTheDocument()
+     expect(await screen.findByText('Question 1')).toBeInTheDocument()
+ 
+     fireEvent.keyDown(screen.getByTestId('study-stage-surface'), { key: ' ', code: 'Space' })
+     fireEvent.click(screen.getByRole('button', { name: /^Good\b/ }))
+ 
+     expect(screen.getByTestId('study-card-shell')).toHaveAttribute('data-answer-feedback', 'right')
++    expect(screen.queryByText(textContentEquals('Progress 2/2'))).not.toBeInTheDocument()
+     expect(screen.queryByText(textContentEquals('Learn 0'))).not.toBeInTheDocument()
+     expect(screen.queryByText(textContentEquals('New 2'))).not.toBeInTheDocument()
+     expect(screen.getByText('Answer 1')).toBeInTheDocument()
+@@ -539,8 +546,9 @@ describe('StudyDeckOverlay', () => {
+     })
+ 
+     expect(screen.getByTestId('study-card-shell')).toHaveAttribute('data-answer-feedback', 'idle')
+-    expect(screen.getByText(textContentEquals('Learn 0'))).toBeInTheDocument()
+-    expect(screen.getByText(textContentEquals('New 1'))).toBeInTheDocument()
++    expect(screen.getByText(textContentEquals('Progress 1/2'))).toBeInTheDocument()
++    expect(screen.queryByText(textContentEquals('Learn 0'))).not.toBeInTheDocument()
++    expect(screen.queryByText(textContentEquals('New 1'))).not.toBeInTheDocument()
+     expect(screen.getByText('Question 2')).toBeInTheDocument()
+   })
+ 
+@@ -564,12 +572,15 @@ describe('StudyDeckOverlay', () => {
+     )
+ 
+     const surface = await screen.findByTestId('study-stage-surface')
+-    expect(screen.getByText(textContentEquals('New 2'))).toBeInTheDocument()
++    expect(screen.getByText(textContentEquals('Progress 2/2'))).toBeInTheDocument()
++    expect(screen.queryByText(textContentEquals('New 2'))).not.toBeInTheDocument()
+ 
+     fireEvent.keyDown(surface, { key: 'ArrowRight', code: 'ArrowRight' })
+ 
+     expect(screen.getByTestId('study-card-shell')).toHaveAttribute('data-answer-feedback', 'right')
+-    expect(screen.getByText(textContentEquals('New 1'))).toBeInTheDocument()
++    expect(screen.getByText(textContentEquals('Progress 1/2'))).toBeInTheDocument()
++    expect(screen.queryByText(textContentEquals('Progress 2/2'))).not.toBeInTheDocument()
++    expect(screen.queryByText(textContentEquals('New 1'))).not.toBeInTheDocument()
+     expect(screen.queryByText(textContentEquals('New 2'))).not.toBeInTheDocument()
+   })
+ 
+@@ -595,14 +606,16 @@ describe('StudyDeckOverlay', () => {
+     )
+ 
+     const surface = await screen.findByTestId('study-stage-surface')
+-    expect(screen.getByText(textContentEquals('Learn 0'))).toBeInTheDocument()
+-    expect(screen.getByText(textContentEquals('New 2'))).toBeInTheDocument()
++    expect(screen.getByText(textContentEquals('Progress 2/2'))).toBeInTheDocument()
++    expect(screen.queryByText(textContentEquals('Learn 0'))).not.toBeInTheDocument()
++    expect(screen.queryByText(textContentEquals('New 2'))).not.toBeInTheDocument()
+ 
+     fireEvent.keyDown(surface, { key: 'ArrowLeft', code: 'ArrowLeft' })
+ 
+     expect(screen.getByTestId('study-card-shell')).toHaveAttribute('data-answer-feedback', 'wrong')
+-    expect(screen.getByText(textContentEquals('Learn 1'))).toBeInTheDocument()
+-    expect(screen.getByText(textContentEquals('New 1'))).toBeInTheDocument()
++    expect(screen.getByText(textContentEquals('Progress 2/2'))).toBeInTheDocument()
++    expect(screen.queryByText(textContentEquals('Learn 1'))).not.toBeInTheDocument()
++    expect(screen.queryByText(textContentEquals('New 1'))).not.toBeInTheDocument()
+     expect(screen.queryByText(textContentEquals('New 2'))).not.toBeInTheDocument()
+   })
+ 
+@@ -734,8 +747,9 @@ describe('StudyDeckOverlay', () => {
+       />,
+     )
+ 
+-    expect(await screen.findByText(textContentEquals('Learn 0'))).toBeInTheDocument()
+-    expect(screen.getByText(textContentEquals('New 1'))).toBeInTheDocument()
++    expect(await screen.findByText(textContentEquals('Progress 2/2'))).toBeInTheDocument()
++    expect(screen.queryByText(textContentEquals('Learn 0'))).not.toBeInTheDocument()
++    expect(screen.queryByText(textContentEquals('New 1'))).not.toBeInTheDocument()
+     expect(screen.queryByText(textContentEquals('Due 1'))).not.toBeInTheDocument()
+   })
+ 
+@@ -768,8 +782,9 @@ describe('StudyDeckOverlay', () => {
+       await new Promise((resolve) => setTimeout(resolve, STUDY_FEEDBACK_MS + 20))
+     })
+ 
+-    expect(screen.getByText(textContentEquals('Learn 1'))).toBeInTheDocument()
+-    expect(screen.getByText(textContentEquals('New 1'))).toBeInTheDocument()
++    expect(screen.getByText(textContentEquals('Progress 2/2'))).toBeInTheDocument()
++    expect(screen.queryByText(textContentEquals('Learn 1'))).not.toBeInTheDocument()
++    expect(screen.queryByText(textContentEquals('New 1'))).not.toBeInTheDocument()
+     expect(await screen.findByText('Question 2')).toBeInTheDocument()
+   })
+ 
+@@ -802,8 +817,9 @@ describe('StudyDeckOverlay', () => {
+       await new Promise((resolve) => setTimeout(resolve, STUDY_FEEDBACK_MS + 20))
+     })
+ 
+-    expect(screen.getByText(textContentEquals('Learn 0'))).toBeInTheDocument()
+-    expect(screen.getByText(textContentEquals('New 1'))).toBeInTheDocument()
++    expect(screen.getByText(textContentEquals('Progress 1/2'))).toBeInTheDocument()
++    expect(screen.queryByText(textContentEquals('Learn 0'))).not.toBeInTheDocument()
++    expect(screen.queryByText(textContentEquals('New 1'))).not.toBeInTheDocument()
+     expect(await screen.findByText('Question 2')).toBeInTheDocument()
+   })
+ 
+@@ -860,8 +876,9 @@ describe('StudyDeckOverlay', () => {
+     )
+ 
+     expect(await screen.findByText('Question 1')).toBeInTheDocument()
+-    expect(screen.getByText(textContentEquals('Learn 0'))).toBeInTheDocument()
+-    expect(screen.getByText(textContentEquals('New 2'))).toBeInTheDocument()
++    expect(screen.getByText(textContentEquals('Progress 2/2'))).toBeInTheDocument()
++    expect(screen.queryByText(textContentEquals('Learn 0'))).not.toBeInTheDocument()
++    expect(screen.queryByText(textContentEquals('New 2'))).not.toBeInTheDocument()
+     expect(screen.queryByText(textContentEquals('Due 0'))).not.toBeInTheDocument()
+ 
+     fireEvent.keyDown(screen.getByTestId('study-stage-surface'), { key: ' ', code: 'Space' })
+@@ -879,8 +896,9 @@ describe('StudyDeckOverlay', () => {
+       'right',
+       expect.objectContaining({ mode: 'cram', sessionId: expect.any(String) }),
+     )
+-    expect(screen.getByText(textContentEquals('Learn 0'))).toBeInTheDocument()
+-    expect(screen.getByText(textContentEquals('New 1'))).toBeInTheDocument()
++    expect(screen.getByText(textContentEquals('Progress 1/2'))).toBeInTheDocument()
++    expect(screen.queryByText(textContentEquals('Learn 0'))).not.toBeInTheDocument()
++    expect(screen.queryByText(textContentEquals('New 1'))).not.toBeInTheDocument()
+     expect(screen.queryByText(textContentEquals('Due 0'))).not.toBeInTheDocument()
+   })
+ 
+@@ -1057,8 +1075,9 @@ describe('StudyDeckOverlay', () => {
+       await new Promise((resolve) => setTimeout(resolve, STUDY_FEEDBACK_MS + 20))
+     })
+ 
+-    expect(screen.getByText(textContentEquals('Learn 1'))).toBeInTheDocument()
+-    expect(screen.getByText(textContentEquals('New 1'))).toBeInTheDocument()
++    expect(screen.getByText(textContentEquals('Progress 2/2'))).toBeInTheDocument()
++    expect(screen.queryByText(textContentEquals('Learn 1'))).not.toBeInTheDocument()
++    expect(screen.queryByText(textContentEquals('New 1'))).not.toBeInTheDocument()
+     expect(await screen.findByText('Question 2')).toBeInTheDocument()
+ 
+     fireEvent.keyDown(screen.getByTestId('study-stage-surface'), { key: ' ', code: 'Space' })
+@@ -1138,8 +1157,9 @@ describe('StudyDeckOverlay', () => {
+ 
+     expect(screen.queryByText('Continue saved session?')).not.toBeInTheDocument()
+     expect(await screen.findByText('Question 2')).toBeInTheDocument()
+-    expect(screen.getByText(textContentEquals('Learn 0'))).toBeInTheDocument()
+-    expect(screen.getByText(textContentEquals('New 1'))).toBeInTheDocument()
++    expect(screen.getByText(textContentEquals('Progress 1/2'))).toBeInTheDocument()
++    expect(screen.queryByText(textContentEquals('Learn 0'))).not.toBeInTheDocument()
++    expect(screen.queryByText(textContentEquals('New 1'))).not.toBeInTheDocument()
+   })
+ 
+   it('merges newly added root cards into the resumed session queue', async () => {
+@@ -1173,8 +1193,9 @@ describe('StudyDeckOverlay', () => {
+     )
+ 
+     expect(await screen.findByText('Question 2')).toBeInTheDocument()
+-    expect(screen.getByText(textContentEquals('Learn 0'))).toBeInTheDocument()
+-    expect(screen.getByText(textContentEquals('New 1'))).toBeInTheDocument()
++    expect(screen.getByText(textContentEquals('Progress 1/2'))).toBeInTheDocument()
++    expect(screen.queryByText(textContentEquals('Learn 0'))).not.toBeInTheDocument()
++    expect(screen.queryByText(textContentEquals('New 1'))).not.toBeInTheDocument()
+   })
+ 
+   it('does not render a reset session action in the study footer', async () => {
+@@ -1205,8 +1226,9 @@ describe('StudyDeckOverlay', () => {
+     )
+ 
+     expect(await screen.findByText('Question 2')).toBeInTheDocument()
+-    expect(screen.getByText(textContentEquals('Learn 0'))).toBeInTheDocument()
+-    expect(screen.getByText(textContentEquals('New 1'))).toBeInTheDocument()
++    expect(screen.getByText(textContentEquals('Progress 1/2'))).toBeInTheDocument()
++    expect(screen.queryByText(textContentEquals('Learn 0'))).not.toBeInTheDocument()
++    expect(screen.queryByText(textContentEquals('New 1'))).not.toBeInTheDocument()
+     expect(screen.queryByRole('button', { name: 'Reset session' })).not.toBeInTheDocument()
+     await expect(getSavedStudySession('study-5')).resolves.toEqual(
+       expect.objectContaining({
+@@ -1246,8 +1268,9 @@ describe('StudyDeckOverlay', () => {
+ 
+     expect(screen.queryByText('Continue saved session?')).not.toBeInTheDocument()
+     expect(await screen.findByText('Question 2')).toBeInTheDocument()
+-    expect(screen.getByText(textContentEquals('Learn 0'))).toBeInTheDocument()
+-    expect(screen.getByText(textContentEquals('New 1'))).toBeInTheDocument()
++    expect(screen.getByText(textContentEquals('Progress 1/2'))).toBeInTheDocument()
++    expect(screen.queryByText(textContentEquals('Learn 0'))).not.toBeInTheDocument()
++    expect(screen.queryByText(textContentEquals('New 1'))).not.toBeInTheDocument()
+   })
+ 
+   it('keeps saved progress when the route-scoped study key hydrates after mount', async () => {
+@@ -1298,8 +1321,9 @@ describe('StudyDeckOverlay', () => {
+     )
+ 
+     expect(await screen.findByText('Question 2')).toBeInTheDocument()
+-    expect(screen.getByText(textContentEquals('Learn 0'))).toBeInTheDocument()
+-    expect(screen.getByText(textContentEquals('New 1'))).toBeInTheDocument()
++    expect(screen.getByText(textContentEquals('Progress 1/2'))).toBeInTheDocument()
++    expect(screen.queryByText(textContentEquals('Learn 0'))).not.toBeInTheDocument()
++    expect(screen.queryByText(textContentEquals('New 1'))).not.toBeInTheDocument()
+   })
+ 
+   it('hydrates the current study card body on demand from card ids', async () => {
+@@ -1530,7 +1554,8 @@ describe('StudyDeckOverlay', () => {
+     await waitFor(() => expect(getCardsByIdsMock).toHaveBeenCalledWith(['card-1']))
+     expect(await screen.findByText('Lazy Question 1')).toBeInTheDocument()
+     await waitFor(() => expect(getCardsByIdsMock).toHaveBeenCalledWith(['card-2']))
+-    expect(screen.getByText(textContentEquals('New 1'))).toBeInTheDocument()
++    expect(screen.getByText(textContentEquals('Progress 2/2'))).toBeInTheDocument()
++    expect(screen.queryByText(textContentEquals('New 1'))).not.toBeInTheDocument()
+     expect(screen.queryByText(textContentEquals('Due 1'))).not.toBeInTheDocument()
+ 
+     fireEvent.keyDown(screen.getByTestId('study-stage-surface'), { key: ' ', code: 'Space' })
+@@ -1541,8 +1566,9 @@ describe('StudyDeckOverlay', () => {
+     })
+ 
+     expect(await screen.findByText('Loading card…')).toBeInTheDocument()
+-    expect(screen.getByText(textContentEquals('Learn 0'))).toBeInTheDocument()
+-    expect(screen.getByText(textContentEquals('New 0'))).toBeInTheDocument()
++    expect(screen.getByText(textContentEquals('Progress 1/2'))).toBeInTheDocument()
++    expect(screen.queryByText(textContentEquals('Learn 0'))).not.toBeInTheDocument()
++    expect(screen.queryByText(textContentEquals('New 0'))).not.toBeInTheDocument()
+     expect(screen.queryByText(textContentEquals('Due 1'))).not.toBeInTheDocument()
+     expect(screen.queryByText(textContentEquals('New 2'))).not.toBeInTheDocument()
+ 
+@@ -1590,7 +1616,8 @@ describe('StudyDeckOverlay', () => {
+     await waitFor(() => expect(getCardsByIdsMock).toHaveBeenCalledWith(['card-1']))
+     expect(await screen.findByText('Lazy Question 1')).toBeInTheDocument()
+     await waitFor(() => expect(getCardsByIdsMock).toHaveBeenCalledWith(['card-2']))
+-    expect(screen.getByText(textContentEquals('New 2'))).toBeInTheDocument()
++    expect(screen.getByText(textContentEquals('Progress 2/2'))).toBeInTheDocument()
++    expect(screen.queryByText(textContentEquals('New 2'))).not.toBeInTheDocument()
+ 
+     fireEvent.keyDown(screen.getByTestId('study-stage-surface'), { key: ' ', code: 'Space' })
+     fireEvent.click(screen.getByRole('button', { name: /^Good\b/ }))
+@@ -1600,8 +1627,9 @@ describe('StudyDeckOverlay', () => {
+     })
+ 
+     expect(await screen.findByText('Loading card…')).toBeInTheDocument()
+-    expect(screen.getByText(textContentEquals('Learn 0'))).toBeInTheDocument()
+-    expect(screen.getByText(textContentEquals('New 1'))).toBeInTheDocument()
++    expect(screen.getByText(textContentEquals('Progress 1/2'))).toBeInTheDocument()
++    expect(screen.queryByText(textContentEquals('Learn 0'))).not.toBeInTheDocument()
++    expect(screen.queryByText(textContentEquals('New 1'))).not.toBeInTheDocument()
+     expect(screen.queryByText(textContentEquals('Due 0'))).not.toBeInTheDocument()
+     expect(screen.queryByText(textContentEquals('New 2'))).not.toBeInTheDocument()
+ 
+diff --git a/frontend-react/src/features/study/components/StudyDeckOverlay.tsx b/frontend-react/src/features/study/components/StudyDeckOverlay.tsx
+index b6d7b4e..69b618b 100644
+--- a/frontend-react/src/features/study/components/StudyDeckOverlay.tsx
++++ b/frontend-react/src/features/study/components/StudyDeckOverlay.tsx
+@@ -59,7 +59,10 @@ import {
+   saveStudySession,
+ } from "@/features/study/lib/studySessionStore";
+ import { Button } from "@/shared/ui/button";
+-import { ReviewStateSummary } from "@/shared/ui/review-state-summary";
++import {
++  getReviewProgressRemaining,
++  ReviewProgressSummary,
++} from "@/shared/ui/review-state-summary";
+ import {
+   getCachedSignedUrlForRef,
+   resolveCardImages,
+@@ -120,13 +123,18 @@ function StudyMobileTitleStack({
+   title,
+   newCount,
+   learnCount,
++  dueCount,
+   doneCount,
+ }: {
+   title: string;
+   newCount: number;
+   learnCount: number;
++  dueCount: number;
+   doneCount: number;
+ }) {
++  const progressTotal = newCount + learnCount + dueCount + doneCount;
++  const progressRemaining = getReviewProgressRemaining(progressTotal, doneCount);
++
+   return (
+     <header
+       data-testid="study-mobile-title-stack"
+@@ -135,12 +143,9 @@ function StudyMobileTitleStack({
+       <div className="max-w-full truncate text-sm font-semibold text-foreground">
+         {title}
+       </div>
+-      <ReviewStateSummary
+-        items={[
+-          { label: "New", value: newCount, tone: "new" },
+-          { label: "Learn", value: learnCount, tone: "learn" },
+-          { label: "Done", value: doneCount, tone: "done" },
+-        ]}
++      <ReviewProgressSummary
++        remainingCount={progressRemaining}
++        totalCount={progressTotal}
+         className="mt-1 justify-center gap-x-2 gap-y-1"
+         itemClassName="rounded-full border border-border bg-background px-2 py-1 text-[11px] shadow-[0_1px_0_rgb(15_23_42_/_0.04)]"
+       />
+@@ -1780,6 +1785,7 @@ export function StudyDeckOverlay({
+                 title={title}
+                 newCount={effectiveReviewCounts.newCount}
+                 learnCount={effectiveReviewCounts.learnCount}
++                dueCount={effectiveReviewCounts.dueCount}
+                 doneCount={effectiveReviewCounts.doneCount}
+               />
+             ) : null}
+@@ -1856,6 +1862,7 @@ export function StudyDeckOverlay({
+             showReviewSummary={!deckMobileViewport}
+             learningCount={effectiveReviewCounts.learnCount}
+             unseenCount={effectiveReviewCounts.newCount}
++            dueCount={effectiveReviewCounts.dueCount}
+             doneCount={effectiveReviewCounts.doneCount}
+             cardTimeMeta={currentCardTimeMeta}
+             studyEstimateMeta={liveStudyEstimateMeta}
+diff --git a/frontend-react/src/shared/ui/review-state-summary.test.tsx b/frontend-react/src/shared/ui/review-state-summary.test.tsx
+index 5f588d6..f498ebb 100644
+--- a/frontend-react/src/shared/ui/review-state-summary.test.tsx
++++ b/frontend-react/src/shared/ui/review-state-summary.test.tsx
+@@ -7,15 +7,14 @@ describe("ReviewStateSummary", () => {
+     const { container } = render(
+       <ReviewStateSummary
+         items={[
+-          { label: "New", value: 3, tone: "new" },
+-          { label: "Learn", value: 1, tone: "learn" },
++          { label: "Progress", value: "4/6", tone: "progress" },
+           { label: "Done", value: 2, tone: "done" },
+         ]}
+       />,
+     );
+ 
+-    expect(screen.getByText((_content, node) => node?.textContent === "New 3")).toBeInTheDocument();
+-    expect(screen.getByText((_content, node) => node?.textContent === "Learn 1")).toBeInTheDocument();
++    expect(screen.getByText((_content, node) => node?.textContent === "Progress 4/6")).toBeInTheDocument();
++    expect(screen.getByText("4/6")).toHaveClass("text-rose-600");
+     const doneItem = screen.getByText((_content, node) => node?.textContent === "Done 2");
+     expect(doneItem).toBeInTheDocument();
+     expect(screen.getByText("2")).toHaveClass("text-emerald-600");
+diff --git a/frontend-react/src/shared/ui/review-state-summary.tsx b/frontend-react/src/shared/ui/review-state-summary.tsx
+index 8308d2e..baf8477 100644
+--- a/frontend-react/src/shared/ui/review-state-summary.tsx
++++ b/frontend-react/src/shared/ui/review-state-summary.tsx
+@@ -3,13 +3,14 @@
+ import * as React from "react";
+ import { cn } from "@/lib/utils";
+ 
+-export type ReviewStateTone = "new" | "learn" | "due" | "done";
++export type ReviewStateTone = "new" | "learn" | "due" | "done" | "progress";
+ 
+ export type ReviewStateSummaryItem = {
+   key?: React.Key;
+   label: string;
+-  value: number;
++  value: number | string;
+   tone: ReviewStateTone;
++  active?: boolean;
+ };
+ 
+ const reviewStateToneClassNames: Record<ReviewStateTone, string> = {
+@@ -17,25 +18,49 @@ const reviewStateToneClassNames: Record<ReviewStateTone, string> = {
+   learn: "text-rose-600",
+   due: "text-emerald-600",
+   done: "text-emerald-600",
++  progress: "text-rose-600",
+ };
+ 
+-function reviewStateValueClassName(tone: ReviewStateTone, value: number) {
+-  return value > 0 ? reviewStateToneClassNames[tone] : "text-muted-foreground/60";
++function normalizeReviewProgressCount(value: number) {
++  return Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0;
+ }
+ 
++export function getReviewProgressRemaining(totalCount: number, doneCount: number) {
++  const total = normalizeReviewProgressCount(totalCount);
++  const done = Math.min(total, normalizeReviewProgressCount(doneCount));
++  return total - done;
++}
++
++export function formatReviewProgress(remainingCount: number, totalCount: number) {
++  const total = normalizeReviewProgressCount(totalCount);
++  const remaining = Math.min(total, normalizeReviewProgressCount(remainingCount));
++  return `${remaining}/${total}`;
++}
++
++function reviewStateValueClassName(
++  tone: ReviewStateTone,
++  value: number | string,
++  active?: boolean,
++) {
++  const isActive = active ?? (typeof value === "number" ? value > 0 : true);
++  return isActive ? reviewStateToneClassNames[tone] : "text-muted-foreground/60";
++}
++
++type ReviewStateSummaryProps = {
++  items: readonly ReviewStateSummaryItem[];
++  className?: string;
++  itemClassName?: string;
++  labelClassName?: string;
++  valueClassName?: string;
++};
++
+ export function ReviewStateSummary({
+   items,
+   className,
+   itemClassName,
+   labelClassName,
+   valueClassName,
+-}: {
+-  items: readonly ReviewStateSummaryItem[];
+-  className?: string;
+-  itemClassName?: string;
+-  labelClassName?: string;
+-  valueClassName?: string;
+-}) {
++}: ReviewStateSummaryProps) {
+   if (items.length === 0) return null;
+ 
+   return (
+@@ -56,7 +81,7 @@ export function ReviewStateSummary({
+           <span className={cn(labelClassName)}>{item.label} </span>
+           <span
+             className={cn(
+-              reviewStateValueClassName(item.tone, item.value),
++              reviewStateValueClassName(item.tone, item.value, item.active),
+               valueClassName,
+             )}
+           >
+@@ -67,3 +92,28 @@ export function ReviewStateSummary({
+     </div>
+   );
+ }
++
++export function ReviewProgressSummary({
++  remainingCount,
++  totalCount,
++  ...summaryProps
++}: Omit<ReviewStateSummaryProps, "items"> & {
++  remainingCount: number;
++  totalCount: number;
++}) {
++  const progressValue = formatReviewProgress(remainingCount, totalCount);
++
++  return (
++    <ReviewStateSummary
++      {...summaryProps}
++      items={[
++        {
++          label: "Progress",
++          value: progressValue,
++          tone: "progress",
++          active: normalizeReviewProgressCount(remainingCount) > 0,
++        },
++      ]}
++    />
++  );
++}

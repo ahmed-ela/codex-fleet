@@ -1,0 +1,386 @@
+diff --git a/frontend-react/src/features/decks/components/DeckBrowserTable.test.tsx b/frontend-react/src/features/decks/components/DeckBrowserTable.test.tsx
+index ddec912..99281bc 100644
+--- a/frontend-react/src/features/decks/components/DeckBrowserTable.test.tsx
++++ b/frontend-react/src/features/decks/components/DeckBrowserTable.test.tsx
+@@ -23,6 +23,7 @@ const baseRow = {
+   newCount: 0,
+   learnCount: 1,
+   dueCount: 1,
++  reviewedCount: 2,
+ } as const;
+ 
+ describe("DeckBrowserTable", () => {
+@@ -69,7 +70,7 @@ describe("DeckBrowserTable", () => {
+     expect(screen.getByText("Name")).toBeInTheDocument();
+   });
+ 
+-  it("omits due counts from the deck browser stats", () => {
++  it("shows due counts in the deck browser stats", () => {
+     render(
+       <DeckBrowserTable
+         rows={[baseRow]}
+@@ -83,7 +84,8 @@ describe("DeckBrowserTable", () => {
+       />,
+     );
+ 
+-    expect(screen.queryByText("Due")).not.toBeInTheDocument();
++    expect(screen.getAllByText("Due").length).toBeGreaterThan(0);
++    expect(screen.getByText((_content, node) => node?.textContent === "Due1")).toBeInTheDocument();
+   });
+ 
+   it("shows an empty state when no decks match", () => {
+@@ -112,6 +114,7 @@ describe("DeckBrowserTable", () => {
+             learnCount: 0,
+             dueCount: 0,
+             newCount: 2,
++            reviewedCount: 0,
+           },
+         ]}
+         selectedDeckKey=""
+diff --git a/frontend-react/src/features/decks/components/DeckBrowserTable.tsx b/frontend-react/src/features/decks/components/DeckBrowserTable.tsx
+index c1c01ab..82b1897 100644
+--- a/frontend-react/src/features/decks/components/DeckBrowserTable.tsx
++++ b/frontend-react/src/features/decks/components/DeckBrowserTable.tsx
+@@ -189,8 +189,8 @@ export function DeckBrowserTable({
+     [expandedById, rows],
+   );
+   const desktopGridColumns = showStudyTimeColumns
+-    ? "lg:grid-cols-[minmax(0,1fr)_4rem_4rem_7.5rem_7.5rem_2.25rem]"
+-    : "lg:grid-cols-[minmax(0,1fr)_4rem_4rem_2.25rem]";
++    ? "lg:grid-cols-[minmax(0,1fr)_4rem_4rem_4rem_7.5rem_7.5rem_2.25rem]"
++    : "lg:grid-cols-[minmax(0,1fr)_4rem_4rem_4rem_2.25rem]";
+ 
+   return (
+     <section className="flex h-auto min-h-0 min-w-0 max-h-[min(60svh,32rem)] flex-col overflow-hidden rounded-[1.25rem] border border-border/70 bg-card/80 shadow-[0_16px_42px_rgb(15_23_42_/_0.08)] sm:max-h-[min(68svh,34rem)] sm:rounded-2xl lg:h-auto lg:max-h-[min(52svh,38rem)]">
+@@ -200,6 +200,7 @@ export function DeckBrowserTable({
+         </div>
+         <div className="pr-1 text-right text-foreground">New</div>
+         <div className="pr-1 text-right text-foreground">Learn</div>
++        <div className="pr-1 text-right text-foreground">Due</div>
+         {showStudyTimeColumns ? (
+           <>
+             <div className="pr-1 text-right text-foreground">Time</div>
+@@ -222,7 +223,9 @@ export function DeckBrowserTable({
+         ) : visibleRows.map((row) => {
+           const selected = selectedDeckKey === row.descendantDeckIds.slice().sort().join("|");
+           const menuOpen = menuRowId === row.id;
+-          const resetEnabled = canResetDeck ? canResetDeck(row) : row.learnCount + row.dueCount > 0;
++          const resetEnabled = canResetDeck
++            ? canResetDeck(row)
++            : row.reviewedCount > 0;
+ 
+           return (
+             <div
+@@ -289,6 +292,11 @@ export function DeckBrowserTable({
+                     value={row.learnCount}
+                     activeClassName="text-rose-600"
+                   />
++                  <MobileStatPill
++                    label="Due"
++                    value={row.dueCount}
++                    activeClassName="text-emerald-600"
++                  />
+                   {showStudyTimeColumns ? (
+                     <>
+                       {getStudyTimeTotalMs(row) > 0 ? (
+@@ -312,6 +320,9 @@ export function DeckBrowserTable({
+               <div className="hidden lg:block">
+                 <CountCell value={row.learnCount} activeClassName="text-rose-600" />
+               </div>
++              <div className="hidden lg:block">
++                <CountCell value={row.dueCount} activeClassName="text-emerald-600" />
++              </div>
+               {showStudyTimeColumns ? (
+                 <>
+                   <div className="hidden lg:block">
+diff --git a/frontend-react/src/features/decks/components/MainAppRoute.test.tsx b/frontend-react/src/features/decks/components/MainAppRoute.test.tsx
+index 8cef6db..5c4a2b9 100644
+--- a/frontend-react/src/features/decks/components/MainAppRoute.test.tsx
++++ b/frontend-react/src/features/decks/components/MainAppRoute.test.tsx
+@@ -329,10 +329,6 @@ function expectVisibleCountLabel(label: string) {
+   expect(screen.getAllByText((_content, node) => node?.textContent === label).length).toBeGreaterThan(0)
+ }
+ 
+-function expectNoVisibleCountLabel(label: string) {
+-  expect(screen.queryByText((_content, node) => node?.textContent === label)).not.toBeInTheDocument()
+-}
+-
+ function expectDeckBrowserStat(row: HTMLElement, label: string, value: number) {
+   expect(within(row).getByText((_content, node) => node?.textContent === `${label}${value}`)).toBeInTheDocument()
+ }
+@@ -395,7 +391,7 @@ describe('MainAppRoute', () => {
+ 
+     expect(await screen.findByRole('button', { name: 'Biology' })).toBeInTheDocument()
+     expect(screen.getAllByText('Learn').length).toBeGreaterThan(0)
+-    expect(screen.queryByText('Due')).not.toBeInTheDocument()
++    expect(screen.getAllByText('Due').length).toBeGreaterThan(0)
+ 
+     await selectDeck('Biology', 'tag-bio')
+   })
+@@ -719,10 +715,10 @@ describe('MainAppRoute', () => {
+     expect(screen.getByText('Biology')).toBeInTheDocument()
+     expect(screen.getByText((_content, node) => node?.textContent === 'New 1')).toBeInTheDocument()
+     expect(screen.getByText((_content, node) => node?.textContent === 'Learn 1')).toBeInTheDocument()
+-    expectNoVisibleCountLabel('Due 1')
++    expectVisibleCountLabel('Due 1')
+   })
+ 
+-  it('shows only New and Learn counts at the top of the mobile selected deck view', async () => {
++  it('shows New, Learn, and Due counts at the top of the mobile selected deck view', async () => {
+     Object.defineProperty(window, 'matchMedia', {
+       writable: true,
+       value: vi.fn().mockImplementation(() => ({
+@@ -764,7 +760,7 @@ describe('MainAppRoute', () => {
+     expect(within(mobileTitleStack).getByText('Biology')).toBeInTheDocument()
+     expect(within(mobileTitleStack).getByText((_content, node) => node?.textContent === 'New 1')).toBeInTheDocument()
+     expect(within(mobileTitleStack).getByText((_content, node) => node?.textContent === 'Learn 1')).toBeInTheDocument()
+-    expect(within(mobileTitleStack).queryByText((_content, node) => node?.textContent === 'Due 1')).not.toBeInTheDocument()
++    expect(within(mobileTitleStack).getByText((_content, node) => node?.textContent === 'Due 1')).toBeInTheDocument()
+   })
+ 
+   it('updates the in-deck title counts immediately after studying a new card', async () => {
+@@ -778,7 +774,7 @@ describe('MainAppRoute', () => {
+ 
+     expect(screen.getByText((_content, node) => node?.textContent === 'New 1')).toBeInTheDocument()
+     expect(screen.getByText((_content, node) => node?.textContent === 'Learn 0')).toBeInTheDocument()
+-    expectNoVisibleCountLabel('Due 0')
++    expectVisibleCountLabel('Due 0')
+ 
+     fireEvent.keyDown(window, { key: ' ', code: 'Space' })
+ 
+@@ -807,7 +803,7 @@ describe('MainAppRoute', () => {
+     await waitFor(() => expect(screen.queryByTestId('study-stage-surface')).not.toBeInTheDocument())
+     expectVisibleCountLabel('New 0')
+     expectVisibleCountLabel('Learn 0')
+-    expectNoVisibleCountLabel('Due 1')
++    expectVisibleCountLabel('Due 1')
+   })
+ 
+   it('keeps answer counts when study closes during the feedback state', async () => {
+@@ -895,7 +891,7 @@ describe('MainAppRoute', () => {
+ 
+     await waitFor(() => expect(screen.queryByTestId('study-stage-surface')).not.toBeInTheDocument())
+     expectVisibleCountLabel('New 1')
+-    expectNoVisibleCountLabel('Due 0')
++    expectVisibleCountLabel('Due 0')
+   })
+ 
+   it('shows study answer intervals from the saved scheduler settings', async () => {
+@@ -969,7 +965,7 @@ describe('MainAppRoute', () => {
+     await waitForPreviewCards(2)
+ 
+     expect(screen.getByText((_content, node) => node?.textContent === 'Learn 1')).toBeInTheDocument()
+-    expectNoVisibleCountLabel('Due 1')
++    expectVisibleCountLabel('Due 1')
+     expect(screen.queryByRole('button', { name: 'Reset' })).not.toBeInTheDocument()
+     expect(screen.queryByRole('dialog', { name: 'Reset study for “Biology”?' })).not.toBeInTheDocument()
+   }, 10000)
+@@ -990,7 +986,7 @@ describe('MainAppRoute', () => {
+     renderCardsRoute()
+     await waitForPreviewCards(1)
+ 
+-    expectNoVisibleCountLabel('Due 1')
++    expectVisibleCountLabel('Due 1')
+     expect(screen.queryByRole('button', { name: 'Study' })).not.toBeInTheDocument()
+     expect(screen.getByRole('button', { name: 'Cram' })).toBeEnabled()
+ 
+@@ -1013,7 +1009,7 @@ describe('MainAppRoute', () => {
+     fireEvent.click(getPrimaryDecksButton())
+ 
+     await waitFor(() => expect(screen.queryByTestId('study-stage-surface')).not.toBeInTheDocument())
+-    expectNoVisibleCountLabel('Due 1')
++    expectVisibleCountLabel('Due 1')
+   }, 10000)
+ 
+   it('auto-resumes the saved cram session from its separate cram session key', async () => {
+diff --git a/frontend-react/src/features/decks/components/MainAppRoute.tsx b/frontend-react/src/features/decks/components/MainAppRoute.tsx
+index aeb0e4c..86f6400 100644
+--- a/frontend-react/src/features/decks/components/MainAppRoute.tsx
++++ b/frontend-react/src/features/decks/components/MainAppRoute.tsx
+@@ -369,6 +369,43 @@ function toStudySeedCard(card: CardActivity): Card {
+   };
+ }
+ 
++type CardActivityLike = Pick<
++  CardActivity,
++  "id" | "parentCardId" | "tagIds" | "createdAt" | "studyMs" | "cramMs"
++>;
++
++function mergeCardActivitySources(
++  sources: readonly (readonly CardActivityLike[])[],
++  options?: {
++    hiddenById?: Readonly<Record<string, true>>;
++    reviewStates?: Readonly<CardReviewStateSnapshot>;
++  },
++): CardActivity[] {
++  const merged: CardActivity[] = [];
++  const seenCardIds = new Set<string>();
++
++  for (const source of sources) {
++    for (const card of source) {
++      const id = card.id.trim();
++      if (!id || seenCardIds.has(id)) continue;
++      if (options?.hiddenById?.[id]) continue;
++      if (options?.reviewStates && !options.reviewStates[id]) continue;
++
++      seenCardIds.add(id);
++      merged.push({
++        id,
++        parentCardId: card.parentCardId,
++        tagIds: [...card.tagIds],
++        ...(normalizeStudyTimeMs(card.studyMs) > 0 ? { studyMs: normalizeStudyTimeMs(card.studyMs) } : {}),
++        ...(normalizeStudyTimeMs(card.cramMs) > 0 ? { cramMs: normalizeStudyTimeMs(card.cramMs) } : {}),
++        createdAt: card.createdAt,
++      });
++    }
++  }
++
++  return merged;
++}
++
+ function matchesDeckSelection(cardDeckIds: readonly string[], selectedDeckIds: readonly string[]) {
+   return selectedDeckIds.length === 0 || cardDeckIds.some((deckId) => selectedDeckIds.includes(deckId));
+ }
+@@ -746,6 +783,7 @@ export function MainAppRoute({
+   );
+   const selectedCardActivity = selectedCardActivityQuery.data ?? EMPTY_CARD_ACTIVITY;
+   const reviewStateCardActivity = reviewStateCardActivityQuery.data ?? EMPTY_CARD_ACTIVITY;
++  const activeStudySessionCards = activeStudySession?.cards ?? EMPTY_CARDS;
+   const studyReviewLogs = studyReviewLogsQuery.data ?? EMPTY_STUDY_REVIEW_LOGS;
+   const studyEstimateProfile = React.useMemo(
+     () => buildStudyTimeEstimatorProfile(studyReviewLogs, "study"),
+@@ -1175,11 +1213,29 @@ export function MainAppRoute({
+   );
+   const loadedCards = filteredCards;
+   const hasMoreCards = Boolean(cardsPageQuery.hasNextPage);
++  const allDeckReviewActivity = React.useMemo(
++    () =>
++      mergeCardActivitySources(
++        [
++          reviewStateCardActivity,
++          selectedCardActivity,
++          activeStudySessionCards,
++          loadedCards,
++        ],
++        { hiddenById, reviewStates },
++      ),
++    [
++      activeStudySessionCards,
++      hiddenById,
++      loadedCards,
++      reviewStateCardActivity,
++      reviewStates,
++      selectedCardActivity,
++    ],
++  );
+   const allDeckEstimateCards = React.useMemo(
+-    () => reviewStateCardActivity
+-      .map(toStudySeedCard)
+-      .filter((card) => !hiddenById[card.id]),
+-    [hiddenById, reviewStateCardActivity],
++    () => allDeckReviewActivity.map(toStudySeedCard),
++    [allDeckReviewActivity],
+   );
+   const deckBrowserRows = React.useMemo(
+     () =>
+@@ -1346,6 +1402,7 @@ export function MainAppRoute({
+             items={[
+               { label: "New", value: selectedDeckReviewCounts.newCount, tone: "new" },
+               { label: "Learn", value: selectedDeckReviewCounts.learnCount, tone: "learn" },
++              { label: "Due", value: selectedDeckReviewCounts.dueCount, tone: "due" },
+             ]}
+             className="justify-center"
+             itemClassName="text-[11px] sm:text-xs"
+@@ -1372,6 +1429,7 @@ export function MainAppRoute({
+       ) : null,
+     [
+       hasDeckSelection,
++      selectedDeckReviewCounts.dueCount,
+       selectedDeckReviewCounts.learnCount,
+       selectedDeckReviewCounts.newCount,
+       selectedDeckStudyEstimate,
+@@ -1408,8 +1466,6 @@ export function MainAppRoute({
+     () => new Map(decks.map((deck) => [deck.id, deck.name] as const)),
+     [decks],
+   );
+-  const activeStudySessionCards = activeStudySession?.cards ?? EMPTY_CARDS;
+-
+   React.useEffect(() => {
+     if (!previewCardId || !previewCardQuery.isError) return;
+     window.alert(errorMessage(previewCardQuery.error));
+@@ -3036,12 +3092,12 @@ export function MainAppRoute({
+       const deckIdSet = new Set(row.descendantDeckIds);
+       openDeckReviewReset(
+         row.fullPath,
+-        reviewStateCardActivity
++        allDeckReviewActivity
+           .filter((card) => card.tagIds.some((deckId) => deckIdSet.has(deckId)))
+           .map((card) => card.id),
+       );
+     },
+-    [openDeckReviewReset, reviewStateCardActivity],
++    [allDeckReviewActivity, openDeckReviewReset],
+   );
+ 
+   const confirmDeckReviewReset = React.useCallback(() => {
+@@ -3088,6 +3144,7 @@ export function MainAppRoute({
+               items={[
+                 { label: "New", value: selectedDeckReviewCounts.newCount, tone: "new" },
+                 { label: "Learn", value: selectedDeckReviewCounts.learnCount, tone: "learn" },
++                { label: "Due", value: selectedDeckReviewCounts.dueCount, tone: "due" },
+               ]}
+               className="mt-1 justify-center gap-x-2 gap-y-1"
+               itemClassName="rounded-full border border-border bg-background px-2 py-1 text-[11px] shadow-[0_1px_0_rgb(15_23_42_/_0.04)]"
+@@ -3216,7 +3273,7 @@ export function MainAppRoute({
+           onRenameDeck={openRenameDeck}
+           onResetDeck={resetDeckReviewFromRow}
+           canResetDeck={(row) =>
+-            reviewStateCardActivity.some((card) =>
++            allDeckReviewActivity.some((card) =>
+               card.tagIds.some((deckId) => row.descendantDeckIds.includes(deckId)),
+             )
+           }
+diff --git a/frontend-react/src/features/decks/lib/deckBrowser.ts b/frontend-react/src/features/decks/lib/deckBrowser.ts
+index 5f3dfde..6f2c0d0 100644
+--- a/frontend-react/src/features/decks/lib/deckBrowser.ts
++++ b/frontend-react/src/features/decks/lib/deckBrowser.ts
+@@ -29,6 +29,7 @@ export type DeckBrowserRow = {
+   newCount: number;
+   learnCount: number;
+   dueCount: number;
++  reviewedCount: number;
+   studyEstimate?: StudyTimeEstimate;
+ };
+ 
+@@ -152,12 +153,14 @@ export function buildDeckBrowserRows(
+ 
+   function visit(node: MutableDeckNode, ancestorIds: string[]) {
+     const descendantDeckIds = Array.from(node.descendantDeckIds);
++    let reviewedCount = 0;
+     let learnCount = 0;
+     let dueCount = 0;
+ 
+     for (const cardId of node.cardIds) {
+       const state = reviewStates[cardId];
+       if (!state) continue;
++      reviewedCount += 1;
+       if (state.bucket === "learn") {
+         learnCount += 1;
+       } else {
+@@ -166,7 +169,7 @@ export function buildDeckBrowserRows(
+     }
+ 
+     const totalCards = totalCardsByNodeId[node.id] ?? 0;
+-    const newCount = Math.max(0, totalCards - learnCount - dueCount);
++    const newCount = Math.max(0, totalCards - reviewedCount);
+     const nodeCards = Array.from(node.cardIds)
+       .map((cardId) => cardById.get(cardId))
+       .filter((card): card is CardActivity => Boolean(card));
+@@ -198,6 +201,7 @@ export function buildDeckBrowserRows(
+       newCount,
+       learnCount,
+       dueCount,
++      reviewedCount,
+       studyEstimate,
+     });
+ 

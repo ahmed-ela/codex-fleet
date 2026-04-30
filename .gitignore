@@ -1,4 +1,10 @@
-/tools/codex-fleet-tui/target/
-/.codex-fleet/
-__pycache__/
+# Local worker checkout copies are huge and reproducible from run metadata.
+/worktrees/
+
+# Local preparation/build cache.
+/cache/
+
+# Local transient queue state. Keep durable prompts/results under runs/archive/rescue.
+/queue/
+
 .DS_Store

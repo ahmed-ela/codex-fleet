@@ -1,0 +1,166 @@
+diff --git a/frontend-react/src/features/decks/components/DeckDesktopMenu.test.tsx b/frontend-react/src/features/decks/components/DeckDesktopMenu.test.tsx
+index 2844228..3b73fa1 100644
+--- a/frontend-react/src/features/decks/components/DeckDesktopMenu.test.tsx
++++ b/frontend-react/src/features/decks/components/DeckDesktopMenu.test.tsx
+@@ -1,6 +1,6 @@
+ import { describe, expect, it, vi } from "vitest";
+ import { render, screen, within } from "@testing-library/react";
+-import { Folder } from "lucide-react";
++import { Folder, Plus } from "lucide-react";
+ import { DeckDesktopMenu } from "./DeckDesktopMenu";
+ 
+ describe("DeckDesktopMenu", () => {
+@@ -161,17 +161,23 @@ describe("DeckDesktopMenu", () => {
+     expect(buttons).toEqual(["Nocards", "Go Back", "Select", ""]);
+   });
+ 
+-  it("renders the leading action before the primary action", () => {
++  it("renders plus add actions with compact desktop labels", () => {
+     render(
+       <DeckDesktopMenu
+         model={{
+           navigationLabel: "Nocards",
+           onNavigation: vi.fn(),
+           leadingActions: [
+-            { id: "add-deck", label: "Add deck", onClick: vi.fn() },
++            { id: "add-deck", label: "Add deck", onClick: vi.fn(), icon: Plus },
+           ],
+           trailingActions: [
+-            { id: "add-card", label: "Add card", onClick: vi.fn(), variant: "default" },
++            {
++              id: "add-card",
++              label: "Add card",
++              onClick: vi.fn(),
++              icon: Plus,
++              variant: "default",
++            },
+             {
+               id: "settings",
+               label: "Open settings",
+@@ -184,7 +190,9 @@ describe("DeckDesktopMenu", () => {
+     );
+ 
+     const buttons = screen.getAllByRole("button").map((button) => button.textContent);
+-    expect(buttons).toEqual(["Nocards", "Add deck", "Add card", ""]);
++    expect(buttons).toEqual(["Nocards", "Deck", "Card", ""]);
++    expect(screen.getByRole("button", { name: "Add deck" })).toHaveTextContent("Deck");
++    expect(screen.getByRole("button", { name: "Add card" })).toHaveTextContent("Card");
+   });
+ 
+   it("pins the deck title to the centered desktop action row", () => {
+diff --git a/frontend-react/src/features/decks/components/DeckDesktopMenu.tsx b/frontend-react/src/features/decks/components/DeckDesktopMenu.tsx
+index 5bba3cc..9b20544 100644
+--- a/frontend-react/src/features/decks/components/DeckDesktopMenu.tsx
++++ b/frontend-react/src/features/decks/components/DeckDesktopMenu.tsx
+@@ -56,8 +56,19 @@ function isIconOnlyAction(action: DeckScreenAction) {
+   return action.iconOnly ?? Boolean(action.icon && !action.label.trim());
+ }
+ 
++function getActionButtonText(action: DeckScreenAction) {
++  if (action.icon && action.id === "add-deck" && action.label === "Add deck") {
++    return "Deck";
++  }
++  if (action.icon && action.id === "add-card" && action.label === "Add card") {
++    return "Card";
++  }
++  return action.label;
++}
++
+ function renderActionButton(action: DeckScreenAction) {
+   const iconOnly = isIconOnlyAction(action);
++  const buttonText = getActionButtonText(action);
+   const Icon = action.icon;
+   return (
+     <Button
+@@ -67,12 +78,12 @@ function renderActionButton(action: DeckScreenAction) {
+       className={iconOnly ? "h-10 w-10 lg:h-8 lg:w-8" : "h-10 px-4 lg:h-8 lg:px-3"}
+       onClick={action.onClick}
+       disabled={action.disabled}
+-      aria-label={iconOnly ? action.label : undefined}
++      aria-label={iconOnly || buttonText !== action.label ? action.label : undefined}
+       aria-pressed={action.active || undefined}
+       title={action.label}
+     >
+       {Icon ? <Icon className="h-4 w-4" aria-hidden="true" /> : null}
+-      {!iconOnly ? <span>{action.label}</span> : null}
++      {!iconOnly ? <span>{buttonText}</span> : null}
+     </Button>
+   );
+ }
+diff --git a/frontend-react/src/features/decks/components/MainAppRoute.test.tsx b/frontend-react/src/features/decks/components/MainAppRoute.test.tsx
+index 12f063e..56b2ec9 100644
+--- a/frontend-react/src/features/decks/components/MainAppRoute.test.tsx
++++ b/frontend-react/src/features/decks/components/MainAppRoute.test.tsx
+@@ -504,7 +504,7 @@ describe('MainAppRoute', () => {
+     const addDeckButton = screen.getByRole('button', { name: 'Add deck' })
+     expect(addDeckButton).toBeInTheDocument()
+     expect(addDeckButton.querySelector('svg')).not.toBeNull()
+-    expect(within(addDeckButton).queryByText('Add deck')).not.toBeInTheDocument()
++    expect(within(addDeckButton).getByText('Deck')).toBeInTheDocument()
+   })
+ 
+   it('renders persisted deck snapshots immediately while refreshing them in the background', async () => {
+@@ -568,14 +568,14 @@ describe('MainAppRoute', () => {
+     expect(screen.getByRole('button', { name: 'Chemistry' })).toBeInTheDocument()
+   })
+ 
+-  it('shows the plus-only add-deck action on the desktop deck browser home', async () => {
++  it('shows the plus-labeled add-deck action on the desktop deck browser home', async () => {
+     renderDecksRoute()
+ 
+     expect(await screen.findByRole('button', { name: 'Biology' })).toBeInTheDocument()
+     const addDeckButton = screen.getByRole('button', { name: 'Add deck' })
+     expect(addDeckButton).toBeInTheDocument()
+     expect(addDeckButton.querySelector('svg')).not.toBeNull()
+-    expect(within(addDeckButton).queryByText('Add deck')).not.toBeInTheDocument()
++    expect(within(addDeckButton).getByText('Deck')).toBeInTheDocument()
+   })
+ 
+   it('shows a top-left Decks title on the mobile deck browser home', async () => {
+@@ -1167,7 +1167,7 @@ describe('MainAppRoute', () => {
+     const addCardButton = screen.getByRole('button', { name: 'Add card' })
+     expect(addCardButton).toBeInTheDocument()
+     expect(addCardButton.querySelector('svg')).not.toBeNull()
+-    expect(within(addCardButton).queryByText('Add card')).not.toBeInTheDocument()
++    expect(within(addCardButton).getByText('Card')).toBeInTheDocument()
+     expect(screen.queryByRole('button', { name: 'Reset' })).not.toBeInTheDocument()
+   })
+ 
+@@ -1959,7 +1959,7 @@ describe('MainAppRoute', () => {
+     const settingsButton = screen.getByRole('button', { name: 'Open settings' })
+     expect(addDeckButton).toBeInTheDocument()
+     expect(addDeckButton.querySelector('svg')).not.toBeNull()
+-    expect(within(addDeckButton).queryByText('Add deck')).not.toBeInTheDocument()
++    expect(within(addDeckButton).getByText('Deck')).toBeInTheDocument()
+     expect(settingsButton).toBeInTheDocument()
+     expect(decksButton.compareDocumentPosition(addDeckButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+     expect(addDeckButton.compareDocumentPosition(settingsButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+@@ -1982,7 +1982,7 @@ describe('MainAppRoute', () => {
+     const addCardButton = screen.getByRole('button', { name: 'Add card' })
+     expect(addCardButton).toBeInTheDocument()
+     expect(addCardButton.querySelector('svg')).not.toBeNull()
+-    expect(within(addCardButton).queryByText('Add card')).not.toBeInTheDocument()
++    expect(within(addCardButton).getByText('Card')).toBeInTheDocument()
+   })
+ 
+   it('adds a card optimistically so the editor can reset before the request finishes', async () => {
+diff --git a/frontend-react/src/features/decks/components/MainAppRoute.tsx b/frontend-react/src/features/decks/components/MainAppRoute.tsx
+index 1374da1..8f1f7ec 100644
+--- a/frontend-react/src/features/decks/components/MainAppRoute.tsx
++++ b/frontend-react/src/features/decks/components/MainAppRoute.tsx
+@@ -2642,7 +2642,6 @@ export function MainAppRoute({
+           active: createDeckOpen,
+           variant: "default",
+           icon: Plus,
+-          iconOnly: true,
+         },
+         {
+           id: "settings",
+@@ -2696,7 +2695,6 @@ export function MainAppRoute({
+           active: editorOpen && !editorCard,
+           variant: "outline",
+           icon: Plus,
+-          iconOnly: true,
+         },
+         {
+           id: "settings",

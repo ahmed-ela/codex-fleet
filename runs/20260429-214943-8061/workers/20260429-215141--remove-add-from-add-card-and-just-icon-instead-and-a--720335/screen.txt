@@ -1,0 +1,33 @@
+
+• Ran bun run --cwd frontend-react test src/features/decks/components/MainAppRoute.test.tsx src/features/decks/components/DeckResponsiveChrome.test.tsx src/features/decks/components/DeckDesktopMenu.test.tsx
+  └
+     RUN  v4.1.4 /Users/ahmedelamin/repos/projects/simplecards/.codex-fleet/worktrees/20260429-214943-8061/20260429-215141--remove-add-from-add-card-and-just-icon-instead-and-a--720335/frontend-react
+    … +5 lines (ctrl + t to view transcript)
+       Duration  12.42s (transform 554ms, setup 470ms, import 747ms, tests 11.53s, environment 1.34s)
+
+
+• Ran git status --short
+  └  M frontend-react/src/features/decks/components/MainAppRoute.test.tsx
+     M frontend-react/src/features/decks/components/MainAppRoute.tsx
+
+• Ran git diff --stat
+  └  .../decks/components/MainAppRoute.test.tsx         | 24 +++++++++++++++++-----
+     .../src/features/decks/components/MainAppRoute.tsx |  3 +++
+     2 files changed, 22 insertions(+), 5 deletions(-)
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• Summary
+  Changed the desktop Add deck and Add card header actions to render as plus-icon-only buttons while keeping their accessible names and titles.
+
+  Files Changed
+
+  - frontend-react/src/features/decks/components/MainAppRoute.tsx
+  - frontend-react/src/features/decks/components/MainAppRoute.test.tsx
+
+  Tests
+Token usage: total=117,214 input=110,502 (+ 488,448 cached) output=6,712 (reasoning 2,261)
+To continue this session, run codex resume 019ddc15-bc91-73c2-951e-729cf7d800f0
+
+
+

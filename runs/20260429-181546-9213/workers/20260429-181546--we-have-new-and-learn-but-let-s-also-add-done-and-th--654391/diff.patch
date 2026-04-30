@@ -1,0 +1,749 @@
+diff --git a/frontend-react/src/features/decks/components/DeckBrowserTable.test.tsx b/frontend-react/src/features/decks/components/DeckBrowserTable.test.tsx
+index ddec912..7703314 100644
+--- a/frontend-react/src/features/decks/components/DeckBrowserTable.test.tsx
++++ b/frontend-react/src/features/decks/components/DeckBrowserTable.test.tsx
+@@ -1,4 +1,4 @@
+-import { fireEvent, render, screen } from "@testing-library/react";
++import { fireEvent, render, screen, within } from "@testing-library/react";
+ import { describe, expect, it, vi } from "vitest";
+ import { DeckBrowserTable } from "./DeckBrowserTable";
+ 
+@@ -23,6 +23,7 @@ const baseRow = {
+   newCount: 0,
+   learnCount: 1,
+   dueCount: 1,
++  doneCount: 1,
+ } as const;
+ 
+ describe("DeckBrowserTable", () => {
+@@ -86,6 +87,27 @@ describe("DeckBrowserTable", () => {
+     expect(screen.queryByText("Due")).not.toBeInTheDocument();
+   });
+ 
++  it("shows done counts with the green active number", () => {
++    render(
++      <DeckBrowserTable
++        rows={[baseRow]}
++        selectedDeckKey=""
++        onSelectDeck={vi.fn()}
++        onAddSubdeck={vi.fn()}
++        onSelectCards={vi.fn()}
++        onRenameDeck={vi.fn()}
++        onResetDeck={vi.fn()}
++        onDeleteDeck={vi.fn()}
++      />,
++    );
++
++    const row = screen.getByRole("button", { name: "Biology" });
++    const donePill = within(row).getByText((_content, node) => node?.textContent === "Done1");
++
++    expect(donePill).toBeInTheDocument();
++    expect(within(donePill).getByText("1")).toHaveClass("text-emerald-600");
++  });
++
+   it("shows an empty state when no decks match", () => {
+     render(
+       <DeckBrowserTable
+@@ -111,6 +133,7 @@ describe("DeckBrowserTable", () => {
+             ...baseRow,
+             learnCount: 0,
+             dueCount: 0,
++            doneCount: 0,
+             newCount: 2,
+           },
+         ]}
+diff --git a/frontend-react/src/features/decks/components/DeckBrowserTable.tsx b/frontend-react/src/features/decks/components/DeckBrowserTable.tsx
+index c1c01ab..d3f9d85 100644
+--- a/frontend-react/src/features/decks/components/DeckBrowserTable.tsx
++++ b/frontend-react/src/features/decks/components/DeckBrowserTable.tsx
+@@ -189,8 +189,8 @@ export function DeckBrowserTable({
+     [expandedById, rows],
+   );
+   const desktopGridColumns = showStudyTimeColumns
+-    ? "lg:grid-cols-[minmax(0,1fr)_4rem_4rem_7.5rem_7.5rem_2.25rem]"
+-    : "lg:grid-cols-[minmax(0,1fr)_4rem_4rem_2.25rem]";
++    ? "lg:grid-cols-[minmax(0,1fr)_4rem_4rem_4rem_7.5rem_7.5rem_2.25rem]"
++    : "lg:grid-cols-[minmax(0,1fr)_4rem_4rem_4rem_2.25rem]";
+ 
+   return (
+     <section className="flex h-auto min-h-0 min-w-0 max-h-[min(60svh,32rem)] flex-col overflow-hidden rounded-[1.25rem] border border-border/70 bg-card/80 shadow-[0_16px_42px_rgb(15_23_42_/_0.08)] sm:max-h-[min(68svh,34rem)] sm:rounded-2xl lg:h-auto lg:max-h-[min(52svh,38rem)]">
+@@ -200,6 +200,7 @@ export function DeckBrowserTable({
+         </div>
+         <div className="pr-1 text-right text-foreground">New</div>
+         <div className="pr-1 text-right text-foreground">Learn</div>
++        <div className="pr-1 text-right text-foreground">Done</div>
+         {showStudyTimeColumns ? (
+           <>
+             <div className="pr-1 text-right text-foreground">Time</div>
+@@ -278,7 +279,7 @@ export function DeckBrowserTable({
+                 >
+                   {row.title}
+                 </span>
+-                <div className="ml-auto flex max-w-[10rem] shrink-0 flex-wrap justify-end gap-1 pr-1 lg:hidden">
++                <div className="ml-auto flex max-w-[14rem] shrink-0 flex-wrap justify-end gap-1 pr-1 lg:hidden">
+                   <MobileStatPill
+                     label="New"
+                     value={row.newCount}
+@@ -289,6 +290,11 @@ export function DeckBrowserTable({
+                     value={row.learnCount}
+                     activeClassName="text-rose-600"
+                   />
++                  <MobileStatPill
++                    label="Done"
++                    value={row.doneCount}
++                    activeClassName="text-emerald-600"
++                  />
+                   {showStudyTimeColumns ? (
+                     <>
+                       {getStudyTimeTotalMs(row) > 0 ? (
+@@ -312,6 +318,9 @@ export function DeckBrowserTable({
+               <div className="hidden lg:block">
+                 <CountCell value={row.learnCount} activeClassName="text-rose-600" />
+               </div>
++              <div className="hidden lg:block">
++                <CountCell value={row.doneCount} activeClassName="text-emerald-600" />
++              </div>
+               {showStudyTimeColumns ? (
+                 <>
+                   <div className="hidden lg:block">
+diff --git a/frontend-react/src/features/decks/components/MainAppRoute.test.tsx b/frontend-react/src/features/decks/components/MainAppRoute.test.tsx
+index 9dd76b8..5f046f4 100644
+--- a/frontend-react/src/features/decks/components/MainAppRoute.test.tsx
++++ b/frontend-react/src/features/decks/components/MainAppRoute.test.tsx
+@@ -746,6 +746,7 @@ describe('MainAppRoute', () => {
+     expect(screen.getByText('Biology')).toBeInTheDocument()
+     expect(screen.getByText((_content, node) => node?.textContent === 'New 1')).toBeInTheDocument()
+     expect(screen.getByText((_content, node) => node?.textContent === 'Learn 1')).toBeInTheDocument()
++    expect(screen.getByText((_content, node) => node?.textContent === 'Done 1')).toBeInTheDocument()
+     expectNoVisibleCountLabel('Due 1')
+   })
+ 
+@@ -779,6 +780,7 @@ describe('MainAppRoute', () => {
+     await waitFor(() => {
+       expectDeckBrowserStat(biologyRow, 'New', 12)
+       expectDeckBrowserStat(biologyRow, 'Learn', 6)
++      expectDeckBrowserStat(biologyRow, 'Done', 1)
+     })
+ 
+     deckRoute.unmount()
+@@ -787,11 +789,12 @@ describe('MainAppRoute', () => {
+ 
+     expectVisibleCountLabel('New 12')
+     expectVisibleCountLabel('Learn 6')
++    expectVisibleCountLabel('Done 1')
+     expectNoVisibleCountLabel('New 19')
+     expectNoVisibleCountLabel('Learn 0')
+   })
+ 
+-  it('shows only New and Learn counts at the top of the mobile selected deck view', async () => {
++  it('shows New, Learn, and Done counts at the top of the mobile selected deck view', async () => {
+     Object.defineProperty(window, 'matchMedia', {
+       writable: true,
+       value: vi.fn().mockImplementation(() => ({
+@@ -833,6 +836,7 @@ describe('MainAppRoute', () => {
+     expect(within(mobileTitleStack).getByText('Biology')).toBeInTheDocument()
+     expect(within(mobileTitleStack).getByText((_content, node) => node?.textContent === 'New 1')).toBeInTheDocument()
+     expect(within(mobileTitleStack).getByText((_content, node) => node?.textContent === 'Learn 1')).toBeInTheDocument()
++    expect(within(mobileTitleStack).getByText((_content, node) => node?.textContent === 'Done 1')).toBeInTheDocument()
+     expect(within(mobileTitleStack).queryByText((_content, node) => node?.textContent === 'Due 1')).not.toBeInTheDocument()
+   })
+ 
+@@ -847,6 +851,7 @@ describe('MainAppRoute', () => {
+ 
+     expect(screen.getByText((_content, node) => node?.textContent === 'New 1')).toBeInTheDocument()
+     expect(screen.getByText((_content, node) => node?.textContent === 'Learn 0')).toBeInTheDocument()
++    expect(screen.getByText((_content, node) => node?.textContent === 'Done 0')).toBeInTheDocument()
+     expectNoVisibleCountLabel('Due 0')
+ 
+     fireEvent.keyDown(window, { key: ' ', code: 'Space' })
+@@ -855,6 +860,7 @@ describe('MainAppRoute', () => {
+     const studyControls = screen.getByLabelText('Study controls')
+     expect(within(studyControls).getByText((_content, node) => node?.textContent === 'New 1')).toBeInTheDocument()
+     expect(within(studyControls).getByText((_content, node) => node?.textContent === 'Learn 0')).toBeInTheDocument()
++    expect(within(studyControls).getByText((_content, node) => node?.textContent === 'Done 0')).toBeInTheDocument()
+     expect(within(studyControls).queryByText((_content, node) => node?.textContent === 'Due 0')).not.toBeInTheDocument()
+     fireEvent.keyDown(studySurface, { key: ' ', code: 'Space' })
+     fireEvent.click(within(studyControls).getByRole('button', { name: /^Good\b/ }))
+@@ -876,6 +882,7 @@ describe('MainAppRoute', () => {
+     await waitFor(() => expect(screen.queryByTestId('study-stage-surface')).not.toBeInTheDocument())
+     expectVisibleCountLabel('New 0')
+     expectVisibleCountLabel('Learn 0')
++    expectVisibleCountLabel('Done 1')
+     expectNoVisibleCountLabel('Due 1')
+   })
+ 
+@@ -910,6 +917,7 @@ describe('MainAppRoute', () => {
+     })
+     expectVisibleCountLabel('New 0')
+     expectVisibleCountLabel('Learn 1')
++    expectVisibleCountLabel('Done 0')
+ 
+     unmount()
+     renderDecksRoute()
+@@ -918,6 +926,7 @@ describe('MainAppRoute', () => {
+     await waitFor(() => {
+       expectDeckBrowserStat(biologyRow, 'New', 0)
+       expectDeckBrowserStat(biologyRow, 'Learn', 1)
++      expectDeckBrowserStat(biologyRow, 'Done', 0)
+     })
+   })
+ 
+@@ -1008,6 +1017,7 @@ describe('MainAppRoute', () => {
+ 
+     await waitFor(() => expect(screen.queryByTestId('study-stage-surface')).not.toBeInTheDocument())
+     expectVisibleCountLabel('New 1')
++    expectVisibleCountLabel('Done 0')
+     expectNoVisibleCountLabel('Due 0')
+   })
+ 
+@@ -1082,6 +1092,7 @@ describe('MainAppRoute', () => {
+     await waitForPreviewCards(2)
+ 
+     expect(screen.getByText((_content, node) => node?.textContent === 'Learn 1')).toBeInTheDocument()
++    expectVisibleCountLabel('Done 1')
+     expectNoVisibleCountLabel('Due 1')
+     expect(screen.queryByRole('button', { name: 'Reset' })).not.toBeInTheDocument()
+     expect(screen.queryByRole('dialog', { name: 'Reset study for “Biology”?' })).not.toBeInTheDocument()
+@@ -1104,6 +1115,7 @@ describe('MainAppRoute', () => {
+     await waitForPreviewCards(1)
+ 
+     expectNoVisibleCountLabel('Due 1')
++    expectVisibleCountLabel('Done 1')
+     expect(screen.queryByRole('button', { name: 'Study' })).not.toBeInTheDocument()
+     expect(screen.getByRole('button', { name: 'Cram' })).toBeEnabled()
+ 
+@@ -1114,6 +1126,7 @@ describe('MainAppRoute', () => {
+     const studyControls = screen.getByLabelText('Study controls')
+     expect(within(studyControls).getByText((_content, node) => node?.textContent === 'New 1')).toBeInTheDocument()
+     expect(within(studyControls).getByText((_content, node) => node?.textContent === 'Learn 0')).toBeInTheDocument()
++    expect(within(studyControls).getByText((_content, node) => node?.textContent === 'Done 0')).toBeInTheDocument()
+     expect(within(studyControls).queryByText((_content, node) => node?.textContent === 'Due 0')).not.toBeInTheDocument()
+ 
+     fireEvent.keyDown(studySurface, { key: ' ', code: 'Space' })
+@@ -1127,6 +1140,7 @@ describe('MainAppRoute', () => {
+ 
+     await waitFor(() => expect(screen.queryByTestId('study-stage-surface')).not.toBeInTheDocument())
+     expectNoVisibleCountLabel('Due 1')
++    expectVisibleCountLabel('Done 1')
+   }, 10000)
+ 
+   it('auto-resumes the saved cram session from its separate cram session key', async () => {
+diff --git a/frontend-react/src/features/decks/components/MainAppRoute.tsx b/frontend-react/src/features/decks/components/MainAppRoute.tsx
+index 2b46410..ffc3800 100644
+--- a/frontend-react/src/features/decks/components/MainAppRoute.tsx
++++ b/frontend-react/src/features/decks/components/MainAppRoute.tsx
+@@ -304,6 +304,7 @@ function countSavedStudySessionRemaining(
+   if (index >= queueIds.length && delayedRepeatIds.length === 0) return null;
+ 
+   const seenCardIds = new Set(queueIds.slice(0, index));
++  const doneCardIds = new Set(seenCardIds);
+   const countedCardIds = new Set<string>();
+   let newCount = 0;
+   let learnCount = 0;
+@@ -312,6 +313,7 @@ function countSavedStudySessionRemaining(
+   for (const cardId of queueIds.slice(index)) {
+     if (countedCardIds.has(cardId)) continue;
+     countedCardIds.add(cardId);
++    doneCardIds.delete(cardId);
+ 
+     const state = mode === "review" ? reviewStates[cardId] : null;
+     if (seenCardIds.has(cardId) || state?.bucket === "learn") {
+@@ -326,10 +328,11 @@ function countSavedStudySessionRemaining(
+   for (const cardId of delayedRepeatIds) {
+     if (countedCardIds.has(cardId)) continue;
+     countedCardIds.add(cardId);
++    doneCardIds.delete(cardId);
+     learnCount += 1;
+   }
+ 
+-  return { newCount, learnCount, dueCount };
++  return { newCount, learnCount, dueCount, doneCount: doneCardIds.size };
+ }
+ 
+ function toStudySeedCard(card: CardActivity): Card {
+@@ -1034,6 +1037,7 @@ export function MainAppRoute({
+               newCount: savedCounts.newCount,
+               learnCount: savedCounts.learnCount,
+               dueCount: savedCounts.dueCount,
++              doneCount: savedCounts.doneCount,
+             }
+           : row;
+       });
+@@ -1189,6 +1193,7 @@ export function MainAppRoute({
+             items={[
+               { label: "New", value: selectedDeckReviewCounts.newCount, tone: "new" },
+               { label: "Learn", value: selectedDeckReviewCounts.learnCount, tone: "learn" },
++              { label: "Done", value: selectedDeckReviewCounts.doneCount, tone: "done" },
+             ]}
+             className="justify-center"
+             itemClassName="text-[11px] sm:text-xs"
+@@ -1215,6 +1220,7 @@ export function MainAppRoute({
+       ) : null,
+     [
+       hasDeckSelection,
++      selectedDeckReviewCounts.doneCount,
+       selectedDeckReviewCounts.learnCount,
+       selectedDeckReviewCounts.newCount,
+       selectedDeckStudyEstimate,
+@@ -2839,6 +2845,7 @@ export function MainAppRoute({
+               items={[
+                 { label: "New", value: selectedDeckReviewCounts.newCount, tone: "new" },
+                 { label: "Learn", value: selectedDeckReviewCounts.learnCount, tone: "learn" },
++                { label: "Done", value: selectedDeckReviewCounts.doneCount, tone: "done" },
+               ]}
+               className="mt-1 justify-center gap-x-2 gap-y-1"
+               itemClassName="rounded-full border border-border bg-background px-2 py-1 text-[11px] shadow-[0_1px_0_rgb(15_23_42_/_0.04)]"
+diff --git a/frontend-react/src/features/decks/lib/deckBrowser.test.ts b/frontend-react/src/features/decks/lib/deckBrowser.test.ts
+index 9c21147..31a40be 100644
+--- a/frontend-react/src/features/decks/lib/deckBrowser.test.ts
++++ b/frontend-react/src/features/decks/lib/deckBrowser.test.ts
+@@ -89,6 +89,7 @@ describe("buildDeckBrowserRows", () => {
+       newCount: 1,
+       learnCount: 1,
+       dueCount: 0,
++      doneCount: 0,
+     });
+ 
+     expect(rows[1]).toMatchObject({
+@@ -106,6 +107,7 @@ describe("buildDeckBrowserRows", () => {
+       newCount: 0,
+       learnCount: 0,
+       dueCount: 1,
++      doneCount: 1,
+     });
+   });
+ 
+@@ -144,6 +146,7 @@ describe("buildDeckBrowserRows", () => {
+       newCount: 0,
+       learnCount: 1,
+       dueCount: 1,
++      doneCount: 1,
+       descendantDeckIds: ["tag-science", "tag-bio"],
+     });
+     expect(rows.find((row) => row.fullPath === "Science/Biology")).toMatchObject({
+@@ -151,6 +154,7 @@ describe("buildDeckBrowserRows", () => {
+       newCount: 0,
+       learnCount: 1,
+       dueCount: 0,
++      doneCount: 0,
+       descendantDeckIds: ["tag-bio"],
+     });
+   });
+@@ -175,6 +179,7 @@ describe("buildDeckBrowserRows", () => {
+       newCount: 2,
+       learnCount: 0,
+       dueCount: 0,
++      doneCount: 0,
+     });
+   });
+ 
+diff --git a/frontend-react/src/features/decks/lib/deckBrowser.ts b/frontend-react/src/features/decks/lib/deckBrowser.ts
+index 5f3dfde..5216087 100644
+--- a/frontend-react/src/features/decks/lib/deckBrowser.ts
++++ b/frontend-react/src/features/decks/lib/deckBrowser.ts
+@@ -29,6 +29,7 @@ export type DeckBrowserRow = {
+   newCount: number;
+   learnCount: number;
+   dueCount: number;
++  doneCount: number;
+   studyEstimate?: StudyTimeEstimate;
+ };
+ 
+@@ -154,6 +155,7 @@ export function buildDeckBrowserRows(
+     const descendantDeckIds = Array.from(node.descendantDeckIds);
+     let learnCount = 0;
+     let dueCount = 0;
++    let doneCount = 0;
+ 
+     for (const cardId of node.cardIds) {
+       const state = reviewStates[cardId];
+@@ -162,6 +164,7 @@ export function buildDeckBrowserRows(
+         learnCount += 1;
+       } else {
+         dueCount += 1;
++        doneCount += 1;
+       }
+     }
+ 
+@@ -198,6 +201,7 @@ export function buildDeckBrowserRows(
+       newCount,
+       learnCount,
+       dueCount,
++      doneCount,
+       studyEstimate,
+     });
+ 
+diff --git a/frontend-react/src/features/study/components/StudyControls.test.tsx b/frontend-react/src/features/study/components/StudyControls.test.tsx
+index 35faa45..eed216d 100644
+--- a/frontend-react/src/features/study/components/StudyControls.test.tsx
++++ b/frontend-react/src/features/study/components/StudyControls.test.tsx
+@@ -1,4 +1,4 @@
+-import { fireEvent, render, screen } from '@testing-library/react'
++import { fireEvent, render, screen, within } from '@testing-library/react'
+ import { describe, expect, it, vi } from 'vitest'
+ import { StudyControls } from './StudyControls'
+ 
+@@ -14,6 +14,7 @@ describe('StudyControls', () => {
+         flipped={false}
+         learningCount={2}
+         unseenCount={3}
++        doneCount={1}
+         onBack={onBack}
+         onToggleReference={onToggleReference}
+       />,
+@@ -22,6 +23,9 @@ describe('StudyControls', () => {
+     expect(screen.getByText('Show Answer')).toBeInTheDocument()
+     expect(screen.getByText((_content, node) => node?.textContent === 'New 3')).toBeInTheDocument()
+     expect(screen.getByText((_content, node) => node?.textContent === 'Learn 2')).toBeInTheDocument()
++    const doneItem = screen.getByText((_content, node) => node?.textContent === 'Done 1')
++    expect(doneItem).toBeInTheDocument()
++    expect(within(doneItem).getByText('1')).toHaveClass('text-emerald-600')
+     expect(screen.queryByText((_content, node) => node?.textContent === 'Due 4')).not.toBeInTheDocument()
+     expect(screen.getByTestId('study-show-answer-hint')).toHaveClass('hidden', 'lg:flex')
+     expect(screen.getByLabelText('Home')).toBeInTheDocument()
+diff --git a/frontend-react/src/features/study/components/StudyControls.tsx b/frontend-react/src/features/study/components/StudyControls.tsx
+index cd12006..4f6107d 100644
+--- a/frontend-react/src/features/study/components/StudyControls.tsx
++++ b/frontend-react/src/features/study/components/StudyControls.tsx
+@@ -33,6 +33,7 @@ export function StudyControls({
+   studyEstimateMeta = null,
+   learningCount = 0,
+   unseenCount = 0,
++  doneCount = 0,
+   onBack = noop,
+   onWrong = noop,
+   onRight = noop,
+@@ -55,6 +56,7 @@ export function StudyControls({
+   studyEstimateMeta?: string | null;
+   learningCount?: number;
+   unseenCount?: number;
++  doneCount?: number;
+   onBack?: () => void;
+   onWrong?: () => void;
+   onRight?: () => void;
+@@ -188,6 +190,7 @@ export function StudyControls({
+                     items={[
+                       { label: "New", value: unseenCount, tone: "new" },
+                       { label: "Learn", value: learningCount, tone: "learn" },
++                      { label: "Done", value: doneCount, tone: "done" },
+                     ]}
+                     className="hidden lg:flex"
+                   />
+diff --git a/frontend-react/src/features/study/components/StudyDeckOverlay.test.tsx b/frontend-react/src/features/study/components/StudyDeckOverlay.test.tsx
+index cc01e7d..a5a1589 100644
+--- a/frontend-react/src/features/study/components/StudyDeckOverlay.test.tsx
++++ b/frontend-react/src/features/study/components/StudyDeckOverlay.test.tsx
+@@ -217,6 +217,7 @@ describe('StudyDeckOverlay', () => {
+     expect(await screen.findByRole('button', { name: 'Home' })).toBeInTheDocument()
+     expect(screen.getByText(textContentEquals('Learn 0'))).toBeInTheDocument()
+     expect(screen.getByText(textContentEquals('New 1'))).toBeInTheDocument()
++    expect(screen.getByText(textContentEquals('Done 0'))).toBeInTheDocument()
+     expect(screen.queryByText(textContentEquals('Due 0'))).not.toBeInTheDocument()
+     expect(screen.queryByText('Covered')).not.toBeInTheDocument()
+     expect(await screen.findAllByTestId('occlusion-cover')).toHaveLength(1)
+@@ -228,6 +229,7 @@ describe('StudyDeckOverlay', () => {
+ 
+     expect(screen.queryByText(textContentEquals('Learn 0'))).not.toBeInTheDocument()
+     expect(screen.queryByText(textContentEquals('New 1'))).not.toBeInTheDocument()
++    expect(screen.queryByText(textContentEquals('Done 0'))).not.toBeInTheDocument()
+     expect(screen.queryByText(textContentEquals('Due 0'))).not.toBeInTheDocument()
+     expect(screen.getByRole('button', { name: /^Again\b/ })).toBeInTheDocument()
+     expect(screen.getByRole('button', { name: /^Good\b/ })).toBeInTheDocument()
+@@ -298,6 +300,7 @@ describe('StudyDeckOverlay', () => {
+     expect(within(titleStack).getByText('Biology')).toBeInTheDocument()
+     expect(within(titleStack).getByText(textContentEquals('New 2'))).toBeInTheDocument()
+     expect(within(titleStack).getByText(textContentEquals('Learn 0'))).toBeInTheDocument()
++    expect(within(titleStack).getByText(textContentEquals('Done 0'))).toBeInTheDocument()
+     expect(within(titleStack).queryByText(textContentEquals('Due 0'))).not.toBeInTheDocument()
+ 
+     fireEvent.keyDown(await screen.findByTestId('study-stage-surface'), { key: ' ', code: 'Space' })
+diff --git a/frontend-react/src/features/study/components/StudyDeckOverlay.tsx b/frontend-react/src/features/study/components/StudyDeckOverlay.tsx
+index 35e5bef..b6d7b4e 100644
+--- a/frontend-react/src/features/study/components/StudyDeckOverlay.tsx
++++ b/frontend-react/src/features/study/components/StudyDeckOverlay.tsx
+@@ -120,10 +120,12 @@ function StudyMobileTitleStack({
+   title,
+   newCount,
+   learnCount,
++  doneCount,
+ }: {
+   title: string;
+   newCount: number;
+   learnCount: number;
++  doneCount: number;
+ }) {
+   return (
+     <header
+@@ -137,6 +139,7 @@ function StudyMobileTitleStack({
+         items={[
+           { label: "New", value: newCount, tone: "new" },
+           { label: "Learn", value: learnCount, tone: "learn" },
++          { label: "Done", value: doneCount, tone: "done" },
+         ]}
+         className="mt-1 justify-center gap-x-2 gap-y-1"
+         itemClassName="rounded-full border border-border bg-background px-2 py-1 text-[11px] shadow-[0_1px_0_rgb(15_23_42_/_0.04)]"
+@@ -744,6 +747,7 @@ export function StudyDeckOverlay({
+     newCount: fallbackCounts.unseen,
+     learnCount: fallbackCounts.learning,
+     dueCount: fallbackCounts.due,
++    doneCount: fallbackCounts.done,
+   };
+   const questionHtml = contentToSafeHtml(current?.question ?? "", "display");
+   const answerHtml = contentToSafeHtml(current?.answer ?? "", "display");
+@@ -1776,6 +1780,7 @@ export function StudyDeckOverlay({
+                 title={title}
+                 newCount={effectiveReviewCounts.newCount}
+                 learnCount={effectiveReviewCounts.learnCount}
++                doneCount={effectiveReviewCounts.doneCount}
+               />
+             ) : null}
+ 
+@@ -1851,6 +1856,7 @@ export function StudyDeckOverlay({
+             showReviewSummary={!deckMobileViewport}
+             learningCount={effectiveReviewCounts.learnCount}
+             unseenCount={effectiveReviewCounts.newCount}
++            doneCount={effectiveReviewCounts.doneCount}
+             cardTimeMeta={currentCardTimeMeta}
+             studyEstimateMeta={liveStudyEstimateMeta}
+             onBack={handleClose}
+diff --git a/frontend-react/src/features/study/lib/reviewScheduler.test.ts b/frontend-react/src/features/study/lib/reviewScheduler.test.ts
+index d8c6f00..17c7381 100644
+--- a/frontend-react/src/features/study/lib/reviewScheduler.test.ts
++++ b/frontend-react/src/features/study/lib/reviewScheduler.test.ts
+@@ -279,6 +279,7 @@ describe("reviewScheduler", () => {
+       newCount: 1,
+       learnCount: 1,
+       dueCount: 1,
++      doneCount: 1,
+     });
+   });
+ 
+@@ -327,6 +328,7 @@ describe("reviewScheduler", () => {
+       newCount: 1,
+       learnCount: 1,
+       dueCount: 1,
++      doneCount: 1,
+     });
+   });
+ 
+@@ -351,11 +353,13 @@ describe("reviewScheduler", () => {
+       newCount: 1,
+       learnCount: 1,
+       dueCount: 0,
++      doneCount: 0,
+     });
+     expect(countDeckReviewStates(cards, snapshot, new Date("2026-04-19T12:00:00.000Z"))).toEqual({
+       newCount: 1,
+       learnCount: 1,
+       dueCount: 0,
++      doneCount: 0,
+     });
+     expect(filterEligibleStudyCards(cards, snapshot, new Date("2026-04-19T12:00:00.000Z")).map((card) => card.id))
+       .toEqual(["1", "2"]);
+diff --git a/frontend-react/src/features/study/lib/reviewScheduler.ts b/frontend-react/src/features/study/lib/reviewScheduler.ts
+index 8e315ed..ba8597c 100644
+--- a/frontend-react/src/features/study/lib/reviewScheduler.ts
++++ b/frontend-react/src/features/study/lib/reviewScheduler.ts
+@@ -61,6 +61,7 @@ export type DeckReviewCounts = {
+   newCount: number;
+   learnCount: number;
+   dueCount: number;
++  doneCount: number;
+ };
+ 
+ export type BinaryStudyWorkloadEstimate = {
+@@ -650,6 +651,7 @@ export function countDeckReviewStates(
+   let newCount = 0;
+   let learnCount = 0;
+   let dueCount = 0;
++  let doneCount = 0;
+ 
+   for (const card of cards) {
+     const state = snapshot[card.id];
+@@ -657,7 +659,10 @@ export function countDeckReviewStates(
+       newCount += 1;
+       continue;
+     }
+-    if (!isCardReviewDue(state, now)) continue;
++    if (!isCardReviewDue(state, now)) {
++      if (state.bucket === "due") doneCount += 1;
++      continue;
++    }
+ 
+     if (state.bucket === "learn") {
+       learnCount += 1;
+@@ -666,7 +671,7 @@ export function countDeckReviewStates(
+     }
+   }
+ 
+-  return { newCount, learnCount, dueCount };
++  return { newCount, learnCount, dueCount, doneCount };
+ }
+ 
+ export function countDeckReviewBuckets(
+@@ -676,6 +681,7 @@ export function countDeckReviewBuckets(
+   let newCount = 0;
+   let learnCount = 0;
+   let dueCount = 0;
++  let doneCount = 0;
+ 
+   for (const card of cards) {
+     const state = snapshot[card.id];
+@@ -688,10 +694,11 @@ export function countDeckReviewBuckets(
+       learnCount += 1;
+     } else {
+       dueCount += 1;
++      doneCount += 1;
+     }
+   }
+ 
+-  return { newCount, learnCount, dueCount };
++  return { newCount, learnCount, dueCount, doneCount };
+ }
+ 
+ export function isCardStudyEligible(
+diff --git a/frontend-react/src/features/study/lib/studySession.test.ts b/frontend-react/src/features/study/lib/studySession.test.ts
+index 63edc68..510880e 100644
+--- a/frontend-react/src/features/study/lib/studySession.test.ts
++++ b/frontend-react/src/features/study/lib/studySession.test.ts
+@@ -154,6 +154,7 @@ describe('getRemainingStudyCounts', () => {
+ 
+     expect(getRemainingStudyCounts(session)).toEqual({
+       due: 0,
++      done: 0,
+       learning: 0,
+       unseen: 3,
+     })
+@@ -166,6 +167,7 @@ describe('getRemainingStudyCounts', () => {
+     expect(wrong.queue.map((card) => card.id)).toEqual(['1', '2', '3', '1'])
+     expect(getRemainingStudyCounts(wrong)).toEqual({
+       due: 0,
++      done: 0,
+       learning: 1,
+       unseen: 2,
+     })
+@@ -180,6 +182,7 @@ describe('getRemainingStudyCounts', () => {
+     expect(wrong.queue.map((card) => card.id)).toEqual(['1', '2'])
+     expect(getRemainingStudyCounts(wrong)).toEqual({
+       due: 0,
++      done: 0,
+       learning: 1,
+       unseen: 1,
+     })
+@@ -196,6 +199,7 @@ describe('getRemainingStudyCounts', () => {
+     expect(wrong.delayedRepeats.map((repeat) => repeat.card.id)).toEqual(['1'])
+     expect(getRemainingStudyCounts(wrong)).toEqual({
+       due: 0,
++      done: 0,
+       learning: 1,
+       unseen: 1,
+     })
+@@ -209,10 +213,23 @@ describe('getRemainingStudyCounts', () => {
+       dueCardIds: new Set(['3']),
+     })).toEqual({
+       due: 1,
++      done: 0,
+       learning: 1,
+       unseen: 1,
+     })
+   })
++
++  it('counts completed cards as done when they are no longer queued', () => {
++    const cards = [buildCard('1'), buildCard('2'), buildCard('3')]
++    const right = markCardRight(createStudySession(cards), cards)
++
++    expect(getRemainingStudyCounts(right)).toEqual({
++      due: 0,
++      done: 1,
++      learning: 0,
++      unseen: 2,
++    })
++  })
+ })
+ 
+ describe('delayed study repeats', () => {
+diff --git a/frontend-react/src/features/study/lib/studySession.ts b/frontend-react/src/features/study/lib/studySession.ts
+index a5d3708..0c6624d 100644
+--- a/frontend-react/src/features/study/lib/studySession.ts
++++ b/frontend-react/src/features/study/lib/studySession.ts
+@@ -34,6 +34,7 @@ export type RemainingStudyCounts = {
+   learning: number
+   unseen: number
+   due: number
++  done: number
+ }
+ 
+ export type RemainingStudyCountBuckets = {
+@@ -223,6 +224,7 @@ export function getRemainingStudyCounts(
+   buckets?: RemainingStudyCountBuckets | ReadonlySet<string> | null,
+ ): RemainingStudyCounts {
+   const seenCardIds = new Set(session.queue.slice(0, session.index).map((card) => card.id))
++  const doneCardIds = new Set(seenCardIds)
+   const countedCardIds = new Set<string>()
+   const learnCardIds = isRemainingStudyCountBuckets(buckets) ? buckets.learnCardIds : null
+   const dueCardIds = isRemainingStudyCountBuckets(buckets) ? buckets.dueCardIds : buckets
+@@ -234,6 +236,7 @@ export function getRemainingStudyCounts(
+   for (const card of session.queue.slice(session.index)) {
+     if (countedCardIds.has(card.id)) continue
+     countedCardIds.add(card.id)
++    doneCardIds.delete(card.id)
+ 
+     if (seenCardIds.has(card.id)) {
+       learning += 1
+@@ -249,10 +252,11 @@ export function getRemainingStudyCounts(
+   for (const repeat of session.delayedRepeats) {
+     if (countedCardIds.has(repeat.card.id)) continue
+     countedCardIds.add(repeat.card.id)
++    doneCardIds.delete(repeat.card.id)
+     learning += 1
+   }
+ 
+-  return { learning, unseen, due }
++  return { learning, unseen, due, done: doneCardIds.size }
+ }
+ 
+ export function getSideText(session: StudySession) {
+diff --git a/frontend-react/src/shared/ui/review-state-summary.test.tsx b/frontend-react/src/shared/ui/review-state-summary.test.tsx
+index dd0a9d2..5f588d6 100644
+--- a/frontend-react/src/shared/ui/review-state-summary.test.tsx
++++ b/frontend-react/src/shared/ui/review-state-summary.test.tsx
+@@ -9,14 +9,16 @@ describe("ReviewStateSummary", () => {
+         items={[
+           { label: "New", value: 3, tone: "new" },
+           { label: "Learn", value: 1, tone: "learn" },
+-          { label: "Due", value: 2, tone: "due" },
++          { label: "Done", value: 2, tone: "done" },
+         ]}
+       />,
+     );
+ 
+     expect(screen.getByText((_content, node) => node?.textContent === "New 3")).toBeInTheDocument();
+     expect(screen.getByText((_content, node) => node?.textContent === "Learn 1")).toBeInTheDocument();
+-    expect(screen.getByText((_content, node) => node?.textContent === "Due 2")).toBeInTheDocument();
++    const doneItem = screen.getByText((_content, node) => node?.textContent === "Done 2");
++    expect(doneItem).toBeInTheDocument();
++    expect(screen.getByText("2")).toHaveClass("text-emerald-600");
+     expect(container).not.toHaveTextContent("|");
+   });
+ });
+diff --git a/frontend-react/src/shared/ui/review-state-summary.tsx b/frontend-react/src/shared/ui/review-state-summary.tsx
+index a43f1c5..8308d2e 100644
+--- a/frontend-react/src/shared/ui/review-state-summary.tsx
++++ b/frontend-react/src/shared/ui/review-state-summary.tsx
+@@ -3,7 +3,7 @@
+ import * as React from "react";
+ import { cn } from "@/lib/utils";
+ 
+-export type ReviewStateTone = "new" | "learn" | "due";
++export type ReviewStateTone = "new" | "learn" | "due" | "done";
+ 
+ export type ReviewStateSummaryItem = {
+   key?: React.Key;
+@@ -16,6 +16,7 @@ const reviewStateToneClassNames: Record<ReviewStateTone, string> = {
+   new: "text-sky-600",
+   learn: "text-rose-600",
+   due: "text-emerald-600",
++  done: "text-emerald-600",
+ };
+ 
+ function reviewStateValueClassName(tone: ReviewStateTone, value: number) {

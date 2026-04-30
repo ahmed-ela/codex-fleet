@@ -1,0 +1,74 @@
+diff --git a/frontend-react/src/features/decks/components/MainAppRoute.test.tsx b/frontend-react/src/features/decks/components/MainAppRoute.test.tsx
+index 8666dcf..3dd9aa1 100644
+--- a/frontend-react/src/features/decks/components/MainAppRoute.test.tsx
++++ b/frontend-react/src/features/decks/components/MainAppRoute.test.tsx
+@@ -619,7 +619,7 @@ describe('MainAppRoute', () => {
+     fireEvent.click(screen.getByRole('menuitem', { name: 'Select cards' }))
+ 
+     await waitFor(() => expect(replaceMock).toHaveBeenCalledWith('/cards?decks=tag-bio&select=cards'))
+-    await waitFor(() => expect(screen.getByTitle('Selecting')).toHaveAttribute('aria-pressed', 'true'))
++    expect(await screen.findByText('Choose cards')).toBeInTheDocument()
+   })
+ 
+   it('uses the Decks menu button to return to the deck browser home', async () => {
+@@ -878,21 +878,21 @@ describe('MainAppRoute', () => {
+ 
+     expect(getPrimaryDecksButton()).toBeInTheDocument()
+     expect(screen.queryByRole('button', { name: 'Home' })).not.toBeInTheDocument()
+-    expect(screen.getByRole('button', { name: 'Select' })).toBeInTheDocument()
++    expect(screen.queryByRole('button', { name: 'Select' })).not.toBeInTheDocument()
+     expect(screen.queryByRole('button', { name: 'Study' })).not.toBeInTheDocument()
+     expect(screen.getByRole('button', { name: 'Cram' })).toBeInTheDocument()
+     expect(screen.getByRole('button', { name: 'Add card' })).toBeInTheDocument()
+     expect(screen.queryByRole('button', { name: 'Reset' })).not.toBeInTheDocument()
+   })
+ 
+-  it('toggles card selection from the selected deck header', async () => {
++  it('toggles card selection from the keyboard shortcut on the selected deck route', async () => {
+     renderCardsRoute()
+     await waitForPreviewCards()
+ 
+-    fireEvent.click(screen.getByRole('button', { name: 'Select' }))
++    fireEvent.keyDown(window, { key: 's', code: 'KeyS' })
+ 
+     expect(await screen.findByText('Choose cards')).toBeInTheDocument()
+-    expect(screen.getByRole('button', { name: 'Selecting' })).toHaveAttribute('aria-pressed', 'true')
++    expect(screen.queryByRole('button', { name: 'Selecting' })).not.toBeInTheDocument()
+   })
+ 
+   it('does not expose review reset from the selected deck header', async () => {
+diff --git a/frontend-react/src/features/decks/components/MainAppRoute.tsx b/frontend-react/src/features/decks/components/MainAppRoute.tsx
+index 01bf92f..aeb0e4c 100644
+--- a/frontend-react/src/features/decks/components/MainAppRoute.tsx
++++ b/frontend-react/src/features/decks/components/MainAppRoute.tsx
+@@ -2900,16 +2900,6 @@ export function MainAppRoute({
+       onNavigation: handleOpenDecksHome,
+       title: workspaceTitle,
+       titleMeta: workspaceTitleMeta,
+-      leadingActions: [
+-        {
+-          id: "select",
+-          label: selectionMode ? "Selecting" : "Select",
+-          onClick: toggleSelectionMode,
+-          active: selectionMode,
+-          disabled: !hasDeckSelection || loadedCards.length === 0,
+-          variant: "outline",
+-        },
+-      ],
+       trailingActions: [
+         ...(studyModeVisible
+           ? [
+@@ -2955,13 +2945,9 @@ export function MainAppRoute({
+       handleDesktopAddCardClick,
+       handleOpenDecksHome,
+       handleOpenSettings,
+-      hasDeckSelection,
+-      loadedCards.length,
+       openStudySession,
+-      selectionMode,
+       settingsOpen,
+       studyModeVisible,
+-      toggleSelectionMode,
+       workspaceTitle,
+       workspaceTitleMeta,
+     ],

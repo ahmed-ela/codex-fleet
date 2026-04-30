@@ -1,0 +1,237 @@
+diff --git a/frontend-react/src/features/decks/components/DeckBrowserTable.test.tsx b/frontend-react/src/features/decks/components/DeckBrowserTable.test.tsx
+index b113de9..e12dce0 100644
+--- a/frontend-react/src/features/decks/components/DeckBrowserTable.test.tsx
++++ b/frontend-react/src/features/decks/components/DeckBrowserTable.test.tsx
+@@ -159,6 +159,40 @@ describe("DeckBrowserTable", () => {
+     expect(screen.getByRole("menuitem", { name: "Reset study" })).toBeDisabled();
+   });
+ 
++  it("enables Reset study when saved progress only has completed cards", () => {
++    const onResetDeck = vi.fn();
++
++    render(
++      <DeckBrowserTable
++        rows={[
++          {
++            ...baseRow,
++            learnCount: 0,
++            dueCount: 0,
++            doneCount: 1,
++            newCount: 1,
++          },
++        ]}
++        selectedDeckKey=""
++        onSelectDeck={vi.fn()}
++        onAddSubdeck={vi.fn()}
++        onSelectCards={vi.fn()}
++        onRenameDeck={vi.fn()}
++        onResetDeck={onResetDeck}
++        onDeleteDeck={vi.fn()}
++      />,
++    );
++
++    fireEvent.click(screen.getByRole("button", { name: "Open deck actions for Biology" }));
++
++    const resetButton = screen.getByRole("menuitem", { name: "Reset study" });
++    expect(resetButton).toBeEnabled();
++
++    fireEvent.click(resetButton);
++
++    expect(onResetDeck).toHaveBeenCalled();
++  });
++
+   it("shows Add subdeck in the deck action menu and calls the handler", () => {
+     const onAddSubdeck = vi.fn();
+ 
+diff --git a/frontend-react/src/features/decks/components/DeckBrowserTable.tsx b/frontend-react/src/features/decks/components/DeckBrowserTable.tsx
+index e2321ff..77d9ac5 100644
+--- a/frontend-react/src/features/decks/components/DeckBrowserTable.tsx
++++ b/frontend-react/src/features/decks/components/DeckBrowserTable.tsx
+@@ -26,6 +26,10 @@ function getDeckProgress(row: DeckBrowserRow) {
+   };
+ }
+ 
++function hasResettableStudyProgress(row: DeckBrowserRow) {
++  return row.learnCount + row.dueCount + row.doneCount > 0;
++}
++
+ function ProgressCell({ row }: { row: DeckBrowserRow }) {
+   const progress = getDeckProgress(row);
+ 
+@@ -234,7 +238,7 @@ export function DeckBrowserTable({
+         ) : visibleRows.map((row) => {
+           const selected = selectedDeckKey === row.descendantDeckIds.slice().sort().join("|");
+           const menuOpen = menuRowId === row.id;
+-          const resetEnabled = canResetDeck ? canResetDeck(row) : row.learnCount + row.dueCount > 0;
++          const resetEnabled = canResetDeck ? canResetDeck(row) : hasResettableStudyProgress(row);
+           const progress = getDeckProgress(row);
+ 
+           return (
+diff --git a/frontend-react/src/features/decks/components/MainAppRoute.test.tsx b/frontend-react/src/features/decks/components/MainAppRoute.test.tsx
+index 912c97d..c493304 100644
+--- a/frontend-react/src/features/decks/components/MainAppRoute.test.tsx
++++ b/frontend-react/src/features/decks/components/MainAppRoute.test.tsx
+@@ -702,6 +702,54 @@ describe('MainAppRoute', () => {
+     expect(await screen.findByText('Choose cards')).toBeInTheDocument()
+   })
+ 
++  it('resets saved deck progress from the deck action menu', async () => {
++    const biologyCards = Array.from({ length: 19 }, (_, index) =>
++      buildCard(
++        `card-${index + 1}`,
++        ['tag-bio'],
++        ['Biology'],
++        `Biology ${index + 1}`,
++        `2026-04-14T00:${String(index).padStart(2, '0')}:00.000Z`,
++      ),
++    )
++    seedStore(biologyCards)
++    await saveStudySession('cram:tag-bio', {
++      id: 'session-progress',
++      startedAt: '2026-04-14T00:00:00.000Z',
++      queueIds: biologyCards.map((card) => card.id),
++      index: 1,
++      flipped: false,
++      delayedRepeats: [],
++    })
++
++    renderDecksRoute()
++
++    const row = await screen.findByRole('button', { name: 'Biology' })
++    expect(within(row).getByText(textContentEquals('Progress18/19'))).toBeInTheDocument()
++
++    fireEvent.click(screen.getByRole('button', { name: 'Open deck actions for Biology' }))
++    const resetMenuItem = screen.getByRole('menuitem', { name: 'Reset study' })
++    expect(resetMenuItem).toBeEnabled()
++    fireEvent.click(resetMenuItem)
++
++    const resetDialog = await screen.findByRole('dialog', { name: 'Reset study for “Biology”?' })
++    fireEvent.click(within(resetDialog).getByRole('button', { name: 'Reset study' }))
++
++    await waitFor(() =>
++      expect(screen.queryByRole('dialog', { name: 'Reset study for “Biology”?' })).not.toBeInTheDocument(),
++    )
++    await waitFor(() => {
++      const saved = JSON.parse(
++        localStorage.getItem('simplecards.studySessions.local') || '{"bySessionKey":{}}',
++      ) as { bySessionKey: Record<string, unknown> }
++      expect(saved.bySessionKey['cram:tag-bio']).toBeUndefined()
++    })
++    await waitFor(() => {
++      const updatedRow = screen.getByRole('button', { name: 'Biology' })
++      expect(within(updatedRow).getByText(textContentEquals('Progress19/19'))).toBeInTheDocument()
++    })
++  })
++
+   it('uses the Decks menu button to return to the deck browser home', async () => {
+     renderCardsRoute()
+     await waitForPreviewCards()
+diff --git a/frontend-react/src/features/decks/components/MainAppRoute.tsx b/frontend-react/src/features/decks/components/MainAppRoute.tsx
+index 51a912d..38ca858 100644
+--- a/frontend-react/src/features/decks/components/MainAppRoute.tsx
++++ b/frontend-react/src/features/decks/components/MainAppRoute.tsx
+@@ -123,6 +123,7 @@ import {
+ } from "@/features/study/lib/studyTimeEstimator";
+ import type { StudyMode } from "@/features/study/lib/studyMode";
+ import {
++  discardSavedStudySession,
+   readLocalSavedStudySessions,
+   type SavedStudySession,
+ } from "@/features/study/lib/studySessionStore";
+@@ -605,6 +606,7 @@ export function MainAppRoute({
+   const [deckReviewResetTarget, setDeckReviewResetTarget] = React.useState<{
+     label: string;
+     cardIds: string[];
++    sessionKeys: string[];
+   } | null>(null);
+   const [resettingDeckReview, setResettingDeckReview] = React.useState(false);
+   const [ankiImporting, setAnkiImporting] = React.useState(false);
+@@ -2611,14 +2613,18 @@ export function MainAppRoute({
+   );
+ 
+   const openDeckReviewReset = React.useCallback(
+-    (label: string, cardIds: readonly string[]) => {
++    (label: string, cardIds: readonly string[], sessionKeys: readonly string[] = []) => {
+       const normalizedCardIds = Array.from(
+         new Set(cardIds.map((cardId) => String(cardId ?? "").trim()).filter(Boolean)),
+       );
+-      if (normalizedCardIds.length === 0) return;
++      const normalizedSessionKeys = Array.from(
++        new Set(sessionKeys.map((sessionKey) => String(sessionKey ?? "").trim()).filter(Boolean)),
++      );
++      if (normalizedCardIds.length === 0 && normalizedSessionKeys.length === 0) return;
+       setDeckReviewResetTarget({
+         label,
+         cardIds: normalizedCardIds,
++        sessionKeys: normalizedSessionKeys,
+       });
+     },
+     [],
+@@ -2797,23 +2803,34 @@ export function MainAppRoute({
+   const resetDeckReviewFromRow = React.useCallback(
+     (row: { fullPath: string; descendantDeckIds: string[] }) => {
+       const deckIdSet = new Set(row.descendantDeckIds);
++      const sessionKey = buildSessionKey(row.descendantDeckIds, displayedStudyCountMode);
+       openDeckReviewReset(
+         row.fullPath,
+         reviewStateCardActivity
+           .filter((card) => card.tagIds.some((deckId) => deckIdSet.has(deckId)))
+           .map((card) => card.id),
++        savedStudySessionsByKey[sessionKey] ? [sessionKey] : [],
+       );
+     },
+-    [openDeckReviewReset, reviewStateCardActivity],
++    [
++      displayedStudyCountMode,
++      openDeckReviewReset,
++      reviewStateCardActivity,
++      savedStudySessionsByKey,
++    ],
+   );
+ 
+-  const confirmDeckReviewReset = React.useCallback(() => {
++  const confirmDeckReviewReset = React.useCallback(async () => {
+     if (!deckReviewResetTarget) return;
+     setResettingDeckReview(true);
+     try {
+       const nextReviewStates = removeStoredReviewStates(userId, deckReviewResetTarget.cardIds);
+       reviewStatesRef.current = nextReviewStates;
+       setReviewStates(nextReviewStates);
++      await Promise.all(
++        deckReviewResetTarget.sessionKeys.map((sessionKey) => discardSavedStudySession(sessionKey)),
++      );
++      refreshSavedStudySessions();
+       setDeckReviewResetTarget(null);
+       toastWithTimeout(setToast, "Study progress reset");
+     } catch (error) {
+@@ -2821,7 +2838,7 @@ export function MainAppRoute({
+     } finally {
+       setResettingDeckReview(false);
+     }
+-  }, [deckReviewResetTarget, userId]);
++  }, [deckReviewResetTarget, refreshSavedStudySessions, userId]);
+ 
+   function renderCardsPaneContent() {
+     return (
+@@ -2974,11 +2991,7 @@ export function MainAppRoute({
+           onSelectCards={selectCardsFromBrowser}
+           onRenameDeck={openRenameDeck}
+           onResetDeck={resetDeckReviewFromRow}
+-          canResetDeck={(row) =>
+-            reviewStateCardActivity.some((card) =>
+-              card.tagIds.some((deckId) => row.descendantDeckIds.includes(deckId)),
+-            )
+-          }
++          canResetDeck={(row) => row.learnCount + row.dueCount + row.doneCount > 0}
+           onDeleteDeck={deleteDeckFromMenu}
+         />
+       </div>
+@@ -3217,7 +3230,7 @@ export function MainAppRoute({
+             </Button>
+             <Button
+               variant="destructive"
+-              onClick={confirmDeckReviewReset}
++              onClick={() => void confirmDeckReviewReset()}
+               disabled={!deckReviewResetTarget || resettingDeckReview}
+             >
+               {resettingDeckReview ? "Resetting..." : "Reset study"}

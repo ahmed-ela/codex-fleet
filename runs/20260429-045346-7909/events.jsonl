@@ -1,0 +1,2 @@
+{"base_ref": "HEAD", "base_sha": "296eafd2aa1d7d4de63c188bff6499d7516bd6a3", "event": "headful_run_created", "run_id": "20260429-045346-7909", "ts": "2026-04-29T04:53:46-04:00"}
+{"event": "headful_canceled", "reason": "frontend_cancel", "ts": "2026-04-29T04:53:51-04:00", "worktrees_removed": 0}

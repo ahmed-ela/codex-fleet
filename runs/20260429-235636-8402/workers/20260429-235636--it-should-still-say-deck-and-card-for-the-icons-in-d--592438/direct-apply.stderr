@@ -1,0 +1,4 @@
+error: frontend-react/src/features/decks/components/DeckDesktopMenu.test.tsx: does not match index
+Applied patch to 'frontend-react/src/features/decks/components/DeckDesktopMenu.tsx' cleanly.
+error: frontend-react/src/features/decks/components/MainAppRoute.test.tsx: does not match index
+error: frontend-react/src/features/decks/components/MainAppRoute.tsx: does not match index

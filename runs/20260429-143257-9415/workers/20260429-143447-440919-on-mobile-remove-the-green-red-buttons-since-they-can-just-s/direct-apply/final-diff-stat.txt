@@ -1,0 +1,12 @@
+ .../decks/components/DeckDesktopMenu.test.tsx      |  42 ++
+ .../features/decks/components/DeckDesktopMenu.tsx  |   8 +-
+ .../decks/components/DeckResponsiveChrome.test.tsx |  31 +-
+ .../decks/components/DeckResponsiveChrome.tsx      |  45 +-
+ .../decks/components/MainAppRoute.test.tsx         |  20 +-
+ .../src/features/decks/components/MainAppRoute.tsx |  14 -
+ frontend-react/src/lib/server/simplecardsStore.ts  | 688 ++-------------------
+ .../src/lib/server/simplecardsStoreDeckRollups.ts  | 169 +++++
+ .../src/lib/server/simplecardsStoreMappers.ts      | 201 ++++++
+ .../src/lib/server/simplecardsStorePreviews.ts     | 120 ++++
+ .../src/lib/server/simplecardsStoreRows.ts         | 151 +++++
+ 11 files changed, 840 insertions(+), 649 deletions(-)

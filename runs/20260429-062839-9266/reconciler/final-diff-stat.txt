@@ -1,0 +1,10 @@
+ frontend-react/src/app.css                         |  21 ++-
+ .../decks/components/DeckBrowserTable.test.tsx     |   4 +-
+ .../features/decks/components/DeckBrowserTable.tsx |  13 +-
+ .../decks/components/DeckDesktopMenu.test.tsx      |  47 +++++-
+ .../features/decks/components/DeckDesktopMenu.tsx  |  80 +++++++++--
+ .../features/decks/components/DeckDesktopShell.tsx |   4 +-
+ .../decks/components/MainAppRoute.test.tsx         | 157 +++------------------
+ .../src/features/decks/components/MainAppRoute.tsx |  50 ++-----
+ frontend-react/src/features/decks/types.ts         |   6 +-
+ 9 files changed, 168 insertions(+), 214 deletions(-)

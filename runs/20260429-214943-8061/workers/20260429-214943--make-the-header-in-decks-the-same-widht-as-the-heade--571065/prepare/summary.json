@@ -1,0 +1,29 @@
+{
+  "status": "succeeded",
+  "started_at": "2026-04-29T21:49:43-04:00",
+  "completed_at": "2026-04-29T21:49:48-04:00",
+  "duration_seconds": 4.14,
+  "steps": [
+    {
+      "name": "frontend-react-bun",
+      "source": "auto",
+      "cwd": "frontend-react",
+      "command": "bun install --frozen-lockfile",
+      "cache_key": "dcddda9513fc8919be023646",
+      "cache_hit": true,
+      "outputs": [
+        "node_modules"
+      ],
+      "ignored_paths": [
+        "frontend-react/node_modules"
+      ],
+      "stdout_path": "/Users/ahmedelamin/repos/projects/simplecards/.codex-fleet/runs/20260429-214943-8061/workers/20260429-214943--make-the-header-in-decks-the-same-widht-as-the-heade--571065/prepare/01-frontend-react-bun/install.stdout",
+      "stderr_path": "/Users/ahmedelamin/repos/projects/simplecards/.codex-fleet/runs/20260429-214943-8061/workers/20260429-214943--make-the-header-in-decks-the-same-widht-as-the-heade--571065/prepare/01-frontend-react-bun/install.stderr",
+      "status": "succeeded",
+      "duration_seconds": 4.14
+    }
+  ],
+  "ignored_paths": [
+    "frontend-react/node_modules"
+  ]
+}

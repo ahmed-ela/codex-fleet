@@ -1,0 +1,72 @@
+• Ran bunx vitest run src/features/decks/components/MainAppRoute.test.tsx -t "restores review progress" --testTimeout=10000
+  └
+     RUN  v4.1.4 /Users/ahmedelamin/repos/projects/simplecards/.codex-fleet/
+    … +177 lines (ctrl + t to view transcript)
+       Duration  6.53s (transform 393ms, setup 88ms, import 410ms, tests 5.64s, environment 267ms)
+
+
+• Explored
+  └ Read MainAppRoute.tsx, MainAppRoute.test.tsx, appRouting.ts
+    Search studyOpen|setStudyOpen|activeStudySession|setActiveStudySession|closeStudy|Study in MainAppRoute.tsx
+    Read MainAppRoute.tsx
+
+• Edited frontend-react/src/features/decks/components/MainAppRoute.tsx (+2 -0)
+    1923    const handleOpenDecksHome = React.useCallback(() => {
+    1924 +    setActiveStudySession(null);
+    1925 +    setStudyMode(null);
+    1926      router.replace(buildDecksUrl());
+
+• Ran bun run test -- src/features/decks/components/DeckDesktopMenu.test.tsx src/features/decks/components/
+  │ MainAppRoute.test.tsx
+  └
+     RUN  v4.1.4 /Users/ahmedelamin/repos/projects/simplecards/.codex-fleet/
+    … +7 lines (ctrl + t to view transcript)
+       Duration  12.84s (transform 477ms, setup 196ms, import 505ms, tests 12.04s, environment 572ms)
+
+
+─ Worked for 2m 05s ───────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• The focused deck component tests now pass after making the navigation action close an open study overlay before replacing
+  the route, which matches the expected “Decks” return behavior in this test harness. I’m doing a final diff/status check
+  for exactly what changed.
+
+• Explored
+  └ Search navigationLabel: \"Home\"|label: \"Home\"|getPrimaryHomeButton|button', \{ name: 'Home'|renders the navigation
+           button with a home in components
+
+• Ran git diff --stat && git diff -- frontend-react/src/features/decks/components/DeckDesktopMenu.tsx frontend-react/src/
+  │ features/decks/components/MainAppRoute.tsx frontend-react/src/features/decks/components/DeckDesktopMenu.test.tsx
+  │ frontend-react/src/features/decks/components/MainAppRoute.test.tsx
+  └  .../decks/components/DeckDesktopMenu.test.tsx      | 14 +++---
+     .../features/decks/components/DeckDesktopMenu.tsx  | 55 ++++++++++++++++++++--
+    … +234 lines (ctrl + t to view transcript)
+               id: "select",
+               label: selectionMode ? "Selecting" : "Select",
+
+• Ran git status --short --ignored=matching | sed -n '1,120p'
+  └  M frontend-react/src/features/decks/components/DeckDesktopMenu.test.tsx
+     M frontend-react/src/features/decks/components/DeckDesktopMenu.tsx
+    … +2 lines (ctrl + t to view transcript)
+    !! .vscode/
+    !! frontend-react/node_modules/
+
+• Explored
+  └ Read MEMORY.md
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• Implemented the deck header change.
+
+  Changed
+
+  - Desktop deck navigation now shows the Nocards logo plus Decks instead of a Home-only icon.
+  - Removed the extra selected-deck Home action, so the header no longer shows duplicate home controls.
+  - Returning to Decks now also closes an open study overlay before route replacement.
+  - Updated tests to expect the new Decks navigation.
+
+  Files Changed
+Token usage: total=149,466 input=131,951 (+ 2,200,320 cached) output=17,515 (reasoning 8,909)
+To continue this session, run codex resume 019dd8cb-0155-78f3-b25a-6aceaf281cc3
+
+
+

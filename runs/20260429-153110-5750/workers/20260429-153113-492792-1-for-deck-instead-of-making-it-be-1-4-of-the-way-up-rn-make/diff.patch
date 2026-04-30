@@ -1,0 +1,17 @@
+diff --git a/frontend-react/src/app.css b/frontend-react/src/app.css
+index 5ef6ddd..32e21d8 100644
+--- a/frontend-react/src/app.css
++++ b/frontend-react/src/app.css
+@@ -279,9 +279,9 @@
+     --deck-browser-home-height: calc(var(--app-vv-height, 100svh) - 8rem);
+ 
+     min-height: var(--deck-browser-home-height);
+-    justify-content: center;
+-    padding-top: 0;
+-    padding-bottom: calc(var(--deck-browser-home-height) / 3);
++    justify-content: flex-start;
++    padding-top: calc(var(--deck-browser-home-height) / 5);
++    padding-bottom: 0;
+   }
+ 
+   .deck-browser-header-frame {

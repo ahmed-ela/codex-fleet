@@ -1,0 +1,74 @@
+# Headful Codex screen capture
+
+This worker ran in the interactive Codex TUI. The final visible pane capture is below.
+
+```text
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• deploy:check passed and ended at Wrangler’s --dry-run: exiting now., so the non-destructive Cloudflare path is clean. I’m running deploy:prod now; this is the actual upload/deploy step with --keep-vars.
+
+• Ran bun run deploy:prod
+  └ Using Vite Environment API (experimental)
+    vite v8.0.3 building client environment for production...
+    … +188 lines (ctrl + t to view transcript)
+      www.nocards.app (custom domain - zone name: nocards.app)
+    Current Version ID: d555a27a-0a17-4b3c-ad03-3b8f297271ea
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• Production deploy completed and Wrangler reported Current Version ID: d555a27a-0a17-4b3c-ad03-3b8f297271ea. I’m doing the final remote/live checks now: branch existence, working-tree state, HTTPS/HTTP behavior, and auth callback sanity.
+
+• Ran git status --short --branch
+  └ ## HEAD (no branch)
+
+• Ran git ls-remote --heads origin codex/20260429-220432-deploy-cc0403a
+  └ cc0403aa68f251d02a44d7720027f204b84964e9    refs/heads/codex/20260429-220432-deploy-cc0403a
+
+• Ran curl -sS -D - -o /dev/null http://nocards.app/
+  └ HTTP/1.1 308 Permanent Redirect
+    Date: Thu, 30 Apr 2026 02:06:51 GMT
+    … +8 lines (ctrl + t to view transcript)
+    alt-svc: h3=":443"; ma=86400
+
+
+• Ran curl -sS -D - -o /dev/null https://www.nocards.app/
+  └ HTTP/2 200
+    date: Thu, 30 Apr 2026 02:06:51 GMT
+    … +7 lines (ctrl + t to view transcript)
+    alt-svc: h3=":443"; ma=86400
+
+
+• Ran curl -sS -D - -o /dev/null https://nocards.app/auth/callback
+  └ HTTP/2 302
+    date: Thu, 30 Apr 2026 02:06:51 GMT
+    … +9 lines (ctrl + t to view transcript)
+    alt-svc: h3=":443"; ma=86400
+
+
+• Ran curl -sS -D - -o /dev/null https://nocards.app/
+  └ HTTP/2 200
+    date: Thu, 30 Apr 2026 02:06:51 GMT
+    … +7 lines (ctrl + t to view transcript)
+    alt-svc: h3=":443"; ma=86400
+
+
+• Explored
+  └ Read MEMORY.md, 2026-04-29T19-34-46-5BXd-simplecards_push_and_deploy_detached_snapshot.md
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• Pushed and deployed the detached snapshot cc0403aa68f251d02a44d7720027f204b84964e9.
+
+  Remote branch:
+  origin/codex/20260429-220432-deploy-cc0403a
+
+  Production deploy:
+  Current Version ID: d555a27a-0a17-4b3c-ad03-3b8f297271ea
+Token usage: total=93,703 input=88,767 (+ 269,696 cached) output=4,936 (reasoning 1,860)
+To continue this session, run codex resume 019ddc21-7fd4-7591-bab5-e63eccb51362
+
+
+
+
+```

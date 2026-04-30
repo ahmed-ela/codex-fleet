@@ -1,0 +1,3 @@
+ M frontend-react/workers/app.ts
+ M frontend-react/workers/responseHeaders.test.ts
+ M frontend-react/workers/responseHeaders.ts

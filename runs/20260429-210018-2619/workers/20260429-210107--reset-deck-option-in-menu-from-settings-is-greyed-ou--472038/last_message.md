@@ -1,0 +1,71 @@
+# Headful Codex screen capture
+
+This worker ran in the interactive Codex TUI. The final visible pane capture is below.
+
+```text
+    719        queueIds: biologyCards.map((card) => card.id),
+    720 -      index: 18,
+    720 +      index: 1,
+    721        flipped: false,
+
+• Waited for background terminal
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• The new route test surfaced the app’s progress format as “remaining/total,” so 18/19 means one completed card. I corrected the fixture to match that real display and am rerunning the focused tests.
+
+• Waited for background terminal · bun run --cwd frontend-react test src/features/decks/components/DeckBrowserTable.test.tsx src/features/decks/components/MainAppRoute.test.tsx
+
+• Ran bun run --cwd frontend-react test src/features/decks/components/DeckBrowserTable.test.tsx src/features/decks/components/MainAppRoute.test.tsx
+  └
+     RUN  v4.1.4 /Users/ahmedelamin/repos/projects/simplecards/.codex-fleet/worktrees/20260429-210018-2619/20260429-210107--reset-deck-option-in-menu-from-settings-is-greyed-ou--472038/frontend-react
+    … +5 lines (ctrl + t to view transcript)
+       Duration  8.24s (transform 370ms, setup 128ms, import 422ms, tests 7.78s, environment 389ms)
+
+
+• Waited for background terminal
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• The focused tests pass. I’m running the frontend lint now to catch any handler/dependency issues from the async reset change.
+
+• Waited for background terminal · bun run --cwd frontend-react lint
+
+• Ran bun run --cwd frontend-react lint
+  └ (no output)
+
+• Explored
+  └ Read MEMORY.md
+
+• Ran git status --short
+  └  M frontend-react/src/features/decks/components/DeckBrowserTable.test.tsx
+     M frontend-react/src/features/decks/components/DeckBrowserTable.tsx
+     M frontend-react/src/features/decks/components/MainAppRoute.test.tsx
+     M frontend-react/src/features/decks/components/MainAppRoute.tsx
+
+• Ran git diff -- frontend-react/src/features/decks/components/DeckBrowserTable.tsx frontend-react/src/features/decks/components/DeckBrowserTable.test.tsx frontend-react/src/features/decks/components/MainAppRoute.tsx frontend-react/src/features/
+  │ decks/components/MainAppRoute.test.tsx
+  └ diff --git a/frontend-react/src/features/decks/components/DeckBrowserTable.test.tsx b/frontend-react/src/features/decks/components/DeckBrowserTable.test.tsx
+    index b113de9..e12dce0 100644
+    … +233 lines (ctrl + t to view transcript)
+                 >
+                   {resettingDeckReview ? "Resetting..." : "Reset study"}
+
+• Ran git diff --check
+  └ (no output)
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• Implemented the reset fix.
+
+  Changed
+
+  - Reset enablement now treats doneCount as resettable progress, so 18/19 is not greyed out.
+  - Deck reset now clears saved study sessions as well as stored review states, so it can return to 19/19.
+Token usage: total=144,076 input=129,167 (+ 3,102,592 cached) output=14,909 (reasoning 5,485)
+To continue this session, run codex resume 019ddbe7-6b4f-7063-9f92-3c3621677660
+
+
+
+
+```

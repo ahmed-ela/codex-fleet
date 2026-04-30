@@ -1,0 +1,146 @@
+diff --git a/frontend-react/src/features/decks/components/MainAppRoute.test.tsx b/frontend-react/src/features/decks/components/MainAppRoute.test.tsx
+index f945553..6ff59fd 100644
+--- a/frontend-react/src/features/decks/components/MainAppRoute.test.tsx
++++ b/frontend-react/src/features/decks/components/MainAppRoute.test.tsx
+@@ -579,6 +579,7 @@ describe('MainAppRoute', () => {
+     const addDeckButton = within(mobileDock).getByRole('button', { name: 'Add deck' })
+     expect(addDeckButton).toHaveClass('h-14', 'w-14', 'rounded-full')
+     expect(addDeckButton.querySelector('svg')).not.toBeNull()
++    expect(within(mobileDock).queryByRole('button', { name: 'Add card' })).not.toBeInTheDocument()
+     fireEvent.click(addDeckButton)
+ 
+     expect(await screen.findByRole('dialog', { name: 'Add deck' })).toBeInTheDocument()
+@@ -710,9 +711,11 @@ describe('MainAppRoute', () => {
+     for (const label of ['Decks', 'Cram']) {
+       expect(within(actionPill).getByRole('button', { name: label }).querySelector('svg')).not.toBeNull()
+     }
++    expect(within(actionPill).queryByRole('button', { name: 'Add deck' })).not.toBeInTheDocument()
+     expect(within(actionPill).queryByRole('button', { name: 'Study' })).not.toBeInTheDocument()
+     expect(within(actionPill).queryByRole('button', { name: 'Select' })).not.toBeInTheDocument()
+     expect(within(actionPill).queryByRole('button', { name: 'Add card' })).not.toBeInTheDocument()
++    expect(within(mobileDock).queryByRole('button', { name: 'Add deck' })).not.toBeInTheDocument()
+     expect(within(mobileDock).getByRole('button', { name: 'Add card' })).toHaveClass('rounded-full')
+   })
+ 
+diff --git a/frontend-react/src/features/decks/lib/deckBrowser.test.ts b/frontend-react/src/features/decks/lib/deckBrowser.test.ts
+index 372241f..9c21147 100644
+--- a/frontend-react/src/features/decks/lib/deckBrowser.test.ts
++++ b/frontend-react/src/features/decks/lib/deckBrowser.test.ts
+@@ -109,6 +109,75 @@ describe("buildDeckBrowserRows", () => {
+     });
+   });
+ 
++  it("deduplicates review counts for cards tagged to both parent and child decks", () => {
++    const rows = buildDeckBrowserRows(
++      [
++        buildDeck("tag-science", "Science"),
++        buildDeck("tag-bio", "Science/Biology"),
++      ],
++      {
++        science: 2,
++        "science/biology": 1,
++      },
++      [
++        buildCardActivity("card-both", ["tag-science", "tag-bio"], "2026-04-19T00:00:01.000Z"),
++        buildCardActivity("card-parent", ["tag-science"], "2026-04-19T00:00:02.000Z"),
++      ],
++      {
++        "card-both": {
++          cardId: "card-both",
++          bucket: "learn",
++          lastReviewedAt: "2026-04-19T00:00:00.000Z",
++          dueAt: "2026-04-19T00:10:00.000Z",
++        },
++        "card-parent": {
++          cardId: "card-parent",
++          bucket: "due",
++          lastReviewedAt: "2026-04-19T00:00:00.000Z",
++          dueAt: "2026-04-20T00:00:00.000Z",
++        },
++      },
++    );
++
++    expect(rows.find((row) => row.fullPath === "Science")).toMatchObject({
++      totalCards: 2,
++      newCount: 0,
++      learnCount: 1,
++      dueCount: 1,
++      descendantDeckIds: ["tag-science", "tag-bio"],
++    });
++    expect(rows.find((row) => row.fullPath === "Science/Biology")).toMatchObject({
++      totalCards: 1,
++      newCount: 0,
++      learnCount: 1,
++      dueCount: 0,
++      descendantDeckIds: ["tag-bio"],
++    });
++  });
++
++  it("ignores stale review state for cards outside the deck activity input", () => {
++    const rows = buildDeckBrowserRows(
++      [buildDeck("tag-bio", "Biology")],
++      { biology: 2 },
++      [buildCardActivity("card-new", ["tag-bio"], "2026-04-19T00:00:01.000Z")],
++      {
++        "deleted-card": {
++          cardId: "deleted-card",
++          bucket: "due",
++          lastReviewedAt: "2026-04-19T00:00:00.000Z",
++          dueAt: "2026-04-20T00:00:00.000Z",
++        },
++      },
++    );
++
++    expect(rows[0]).toMatchObject({
++      totalCards: 2,
++      newCount: 2,
++      learnCount: 0,
++      dueCount: 0,
++    });
++  });
++
+   it("uses card-aware study time estimates when review logs and scheduler settings are available", () => {
+     const rows = buildDeckBrowserRows(
+       [buildDeck("tag-slow", "Slow Deck")],
+diff --git a/frontend-react/src/features/study/lib/reviewScheduler.test.ts b/frontend-react/src/features/study/lib/reviewScheduler.test.ts
+index 4b2dbee..d8c6f00 100644
+--- a/frontend-react/src/features/study/lib/reviewScheduler.test.ts
++++ b/frontend-react/src/features/study/lib/reviewScheduler.test.ts
+@@ -330,6 +330,37 @@ describe("reviewScheduler", () => {
+     });
+   });
+ 
++  it("ties bucket counts and eligibility to the supplied deck cards, not orphaned review states", () => {
++    const cards = [buildCard("1"), buildCard("2")];
++    const snapshot: CardReviewStateSnapshot = {
++      "2": {
++        cardId: "2",
++        bucket: "learn",
++        lastReviewedAt: "2026-04-19T00:00:00.000Z",
++        dueAt: "2026-04-19T00:10:00.000Z",
++      },
++      "deleted-card": {
++        cardId: "deleted-card",
++        bucket: "due",
++        lastReviewedAt: "2026-04-19T00:00:00.000Z",
++        dueAt: "2026-04-19T00:00:00.000Z",
++      },
++    };
++
++    expect(countDeckReviewBuckets(cards, snapshot)).toEqual({
++      newCount: 1,
++      learnCount: 1,
++      dueCount: 0,
++    });
++    expect(countDeckReviewStates(cards, snapshot, new Date("2026-04-19T12:00:00.000Z"))).toEqual({
++      newCount: 1,
++      learnCount: 1,
++      dueCount: 0,
++    });
++    expect(filterEligibleStudyCards(cards, snapshot, new Date("2026-04-19T12:00:00.000Z")).map((card) => card.id))
++      .toEqual(["1", "2"]);
++  });
++
+   it("estimates recurring reviews per day and current relearn load", () => {
+     const estimate = estimateBinaryStudyWorkload(
+       {

@@ -1,0 +1,206 @@
+diff --git a/frontend-react/src/features/decks/components/MainAppRoute.test.tsx b/frontend-react/src/features/decks/components/MainAppRoute.test.tsx
+index 5be0d49..8cef6db 100644
+--- a/frontend-react/src/features/decks/components/MainAppRoute.test.tsx
++++ b/frontend-react/src/features/decks/components/MainAppRoute.test.tsx
+@@ -333,6 +333,10 @@ function expectNoVisibleCountLabel(label: string) {
+   expect(screen.queryByText((_content, node) => node?.textContent === label)).not.toBeInTheDocument()
+ }
+ 
++function expectDeckBrowserStat(row: HTMLElement, label: string, value: number) {
++  expect(within(row).getByText((_content, node) => node?.textContent === `${label}${value}`)).toBeInTheDocument()
++}
++
+ describe('MainAppRoute', () => {
+   beforeEach(() => {
+     seedStore()
+@@ -806,6 +810,48 @@ describe('MainAppRoute', () => {
+     expectNoVisibleCountLabel('Due 1')
+   })
+ 
++  it('keeps answer counts when study closes during the feedback state', async () => {
++    process.env.SIMPLECARDS_ENABLE_STUDY_MODE = '1'
++    seedStore([
++      buildCard('card-1', ['tag-bio'], ['Biology'], 'Biology prompt', '2026-04-14T00:00:01.000Z'),
++    ])
++
++    const { unmount } = renderCardsRoute()
++    await waitForPreviewCards(1)
++
++    expect(screen.getByText((_content, node) => node?.textContent === 'New 1')).toBeInTheDocument()
++    expect(screen.getByText((_content, node) => node?.textContent === 'Learn 0')).toBeInTheDocument()
++
++    fireEvent.keyDown(window, { key: ' ', code: 'Space' })
++
++    const studySurface = await screen.findByTestId('study-stage-surface')
++    const studyControls = screen.getByLabelText('Study controls')
++    fireEvent.keyDown(studySurface, { key: ' ', code: 'Space' })
++    fireEvent.click(within(studyControls).getByRole('button', { name: /^Again\b/ }))
++
++    fireEvent.keyDown(window, { key: 'Escape', code: 'Escape' })
++
++    await waitFor(() => expect(screen.queryByTestId('study-stage-surface')).not.toBeInTheDocument())
++    await waitFor(() => {
++      expect(
++        JSON.parse(localStorage.getItem('simplecards.reviewStates.local') ?? '{}').byCardId['card-1'],
++      ).toMatchObject({
++        bucket: 'learn',
++      })
++    })
++    expectVisibleCountLabel('New 0')
++    expectVisibleCountLabel('Learn 1')
++
++    unmount()
++    renderDecksRoute()
++
++    const biologyRow = await screen.findByRole('button', { name: 'Biology' })
++    await waitFor(() => {
++      expectDeckBrowserStat(biologyRow, 'New', 0)
++      expectDeckBrowserStat(biologyRow, 'Learn', 1)
++    })
++  })
++
+   it('restores review progress and review logs when Cmd+Z undoes a committed study answer', async () => {
+     process.env.SIMPLECARDS_ENABLE_STUDY_MODE = '1'
+     const deleteStudyReviewLogsSpy = vi.spyOn(api, 'deleteStudyReviewLogs')
+diff --git a/frontend-react/src/features/study/components/StudyDeckOverlay.test.tsx b/frontend-react/src/features/study/components/StudyDeckOverlay.test.tsx
+index dd8a800..2e8eccf 100644
+--- a/frontend-react/src/features/study/components/StudyDeckOverlay.test.tsx
++++ b/frontend-react/src/features/study/components/StudyDeckOverlay.test.tsx
+@@ -300,7 +300,7 @@ describe('StudyDeckOverlay', () => {
+     expect(within(titleStack).getByText(textContentEquals('Learn 0'))).toBeInTheDocument()
+     expect(within(titleStack).queryByText(textContentEquals('Due 0'))).not.toBeInTheDocument()
+ 
+-    fireEvent.keyDown(screen.getByTestId('study-stage-surface'), { key: ' ', code: 'Space' })
++    fireEvent.keyDown(await screen.findByTestId('study-stage-surface'), { key: ' ', code: 'Space' })
+ 
+     expect(screen.queryByRole('button', { name: /^Again\b/ })).not.toBeInTheDocument()
+     expect(screen.queryByRole('button', { name: /^Good\b/ })).not.toBeInTheDocument()
+@@ -883,6 +883,7 @@ describe('StudyDeckOverlay', () => {
+ 
+   it('cancels a pending good answer with Cmd+Z before the card advances', async () => {
+     const onRecordAnswer = vi.fn()
++    const onUndoAnswer = vi.fn()
+ 
+     render(
+       <StudyDeckOverlay
+@@ -899,6 +900,7 @@ describe('StudyDeckOverlay', () => {
+           updatedAt: '2026-03-09T00:00:00.000Z',
+         }))}
+         onRecordAnswer={onRecordAnswer}
++        onUndoAnswer={onUndoAnswer}
+         onClose={vi.fn()}
+       />,
+     )
+@@ -915,7 +917,13 @@ describe('StudyDeckOverlay', () => {
+       await new Promise((resolve) => setTimeout(resolve, STUDY_FEEDBACK_MS + 20))
+     })
+ 
+-    expect(onRecordAnswer).not.toHaveBeenCalled()
++    expect(onRecordAnswer).toHaveBeenCalledTimes(1)
++    expect(onUndoAnswer).toHaveBeenCalledTimes(1)
++    expect(onUndoAnswer.mock.calls[0]?.[0]).toMatchObject({
++      cardId: 'card-1',
++      result: 'right',
++      mode: 'study',
++    })
+     expect(screen.getByTestId('study-card-shell')).toHaveAttribute('data-answer-feedback', 'idle')
+     expect(screen.getByText('Answer 1')).toBeInTheDocument()
+     expect(screen.queryByText('Question 2')).not.toBeInTheDocument()
+diff --git a/frontend-react/src/features/study/components/StudyDeckOverlay.tsx b/frontend-react/src/features/study/components/StudyDeckOverlay.tsx
+index ab011fe..0846e80 100644
+--- a/frontend-react/src/features/study/components/StudyDeckOverlay.tsx
++++ b/frontend-react/src/features/study/components/StudyDeckOverlay.tsx
+@@ -759,6 +759,7 @@ export function StudyDeckOverlay({
+     "right" | "wrong" | null
+   >(null);
+   const answerAdvanceTimeoutRef = React.useRef<number | null>(null);
++  const pendingAnswerRef = React.useRef<StudyAnswerUndoMeta | null>(null);
+   const clearAnswerAdvanceTimeout = React.useCallback(() => {
+     if (answerAdvanceTimeoutRef.current === null) return;
+     window.clearTimeout(answerAdvanceTimeoutRef.current);
+@@ -981,6 +982,7 @@ export function StudyDeckOverlay({
+       setPendingCountSession(null);
+       setSession(snapshot.previousSession);
+       setAnswerFeedback(null);
++      pendingAnswerRef.current = null;
+       clearAnswerAdvanceTimeout();
+     },
+     [clearAnswerAdvanceTimeout],
+@@ -1006,9 +1008,12 @@ export function StudyDeckOverlay({
+ 
+   const undoOrUnflip = React.useCallback(() => {
+     if (answerFeedback && answerAdvanceTimeoutRef.current !== null) {
++      const pendingAnswer = pendingAnswerRef.current;
++      pendingAnswerRef.current = null;
+       clearAnswerAdvanceTimeout();
+       setPendingCountSession(null);
+       setAnswerFeedback(null);
++      if (pendingAnswer) onUndoAnswer?.(pendingAnswer);
+       return;
+     }
+ 
+@@ -1023,6 +1028,7 @@ export function StudyDeckOverlay({
+     current,
+     currentCardLoaded,
+     done,
++    onUndoAnswer,
+     session.flipped,
+     undo,
+   ]);
+@@ -1032,6 +1038,7 @@ export function StudyDeckOverlay({
+     undoStackRef.current = [];
+     pendingDeletedCardIdsRef.current.clear();
+     setPendingCountSession(null);
++    pendingAnswerRef.current = null;
+     clearAnswerAdvanceTimeout();
+     setAnswerFeedback(null);
+   }, [clearAnswerAdvanceTimeout, session.id, sessionKey]);
+@@ -1048,6 +1055,7 @@ export function StudyDeckOverlay({
+     setPendingCountSession(null);
+     setSessionReady(false);
+     setHydratedSessionKey(null);
++    pendingAnswerRef.current = null;
+     clearAnswerAdvanceTimeout();
+     setAnswerFeedback(null);
+ 
+@@ -1203,6 +1211,11 @@ export function StudyDeckOverlay({
+         reviewedAt: answeredAt,
+         sessionId: session.id,
+       };
++      const answerUndoMeta = {
++        ...answerMeta,
++        cardId: answeredCardId,
++        result,
++      };
+       const cramAgainDueAt =
+         result === "wrong" && cramMode && cramAgainIntervalMinutes > 0
+           ? addMinutesIso(answeredAt, cramAgainIntervalMinutes)
+@@ -1221,16 +1234,14 @@ export function StudyDeckOverlay({
+ 
+       const applyMark = () => {
+         answerAdvanceTimeoutRef.current = null;
+-        applyUndoable(applyResult, {
+-          ...answerMeta,
+-          cardId: answeredCardId,
+-          result,
+-        });
++        applyUndoable(applyResult, answerUndoMeta);
+         setPendingCountSession(null);
+-        onRecordAnswer?.(answeredCardId, result, answerMeta);
++        pendingAnswerRef.current = null;
+         setAnswerFeedback(null);
+       };
+ 
++      pendingAnswerRef.current = answerUndoMeta;
++      onRecordAnswer?.(answeredCardId, result, answerMeta);
+       setPendingCountSession(previewSession);
+       setAnswerFeedback(result);
+ 
+@@ -1582,6 +1593,7 @@ export function StudyDeckOverlay({
+     setSession(createStudySession(studyCards));
+     setUndoStack([]);
+     setPendingCountSession(null);
++    pendingAnswerRef.current = null;
+     clearAnswerAdvanceTimeout();
+     setAnswerFeedback(null);
+   }, [clearAnswerAdvanceTimeout, sessionKey, studyCards]);

@@ -1,0 +1,34 @@
+{
+  "base": {
+    "base_source": "jj_working_copy",
+    "jj_change_id": "lmlqpntvoout",
+    "jj_commit_id": "a9621027d8dea81e18a2d28c2a1755dff7811d17",
+    "jj_description": "",
+    "jj_snapshot_at": "2026-04-29T06:26:13-04:00",
+    "vcs": "jj"
+  },
+  "base_ref": "a9621027d8dea81e18a2d28c2a1755dff7811d17",
+  "base_sha": "a9621027d8dea81e18a2d28c2a1755dff7811d17",
+  "branch": "DETACHED",
+  "cleanup": {
+    "worktrees_removed": 0
+  },
+  "completed_at": "2026-04-29T06:26:15-04:00",
+  "concurrency": 3,
+  "headful": {
+    "auto_reconcile_delay": 5.0,
+    "controller_pane": "%0",
+    "input_finished": false,
+    "session": "codex-fleet-20260429-062613-5099"
+  },
+  "jobs": {},
+  "mode": "headful-tmux",
+  "model": "gpt-5.5",
+  "phase": "canceled",
+  "reasoning_effort": "xhigh",
+  "reconciler": null,
+  "repo_root": "/Users/ahmedelamin/repos/projects/simplecards",
+  "run_id": "20260429-062613-1434",
+  "started_at": "2026-04-29T06:26:13-04:00",
+  "workers": {}
+}
